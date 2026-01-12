@@ -95,9 +95,7 @@ $$
 - **队列长度 (Queue Length) $Q_e(t)$**：
   时刻 $t$，等待专家 $e$ 处理的 Token 数量。这是系统的核心状态变量，也是后续推导“影子价格”的物理载体。
 
-  $$
-  Q_e(t) = Q_e(0) + A_e(t) - S_e(t)
-  $$
+  $$Q_e(t) = Q_e(0) + A_e(t) - S_e(t)$$
 
   其中：
   - $A_e(t)$ 是路由到专家 $e$ 的累积 Token 数。
@@ -107,9 +105,7 @@ $$
   对于每个 Token $j$，路由策略 $\pi$ 需要选择一个专家子集 $\mathcal{S}_j \subset \mathcal{E}$，使得 $|\mathcal{S}_j| = k$（通常 $k=2$ 或 $k=8$）。
   - 令 $x_{j,e} \in \{0, 1\}$ 表示 Token $j$ 是否被路由给专家 $e$。
 
-  $$
-  A_e(t) = \sum_{j: t_j \le t} x_{j,e}
-  $$
+  $$A_e(t) = \sum_{j: t_j \le t} x_{j,e}$$
 
   **关键点**： 在传统排队论中，到达率 $\lambda$ 是外生的。但在 MoE 推理中，到达率 $A_e(t)$ 是内生的（Endogenous），由路由算法控制。这赋予了我们通过调度来平衡负载的能力。
 
@@ -119,16 +115,12 @@ $$
   - GPU $k$ 的服务速率 $\mu_k(t)$ 并非固定值，而是取决于当前 Batch 中激活的专家数量。
   - 令 $\mathcal{A}_k(t) \subseteq \mathcal{E}_k$ 为时刻 $t$ 在 GPU $k$ 上处于激活状态的专家集合。
 
-  $$
-  \text{ServiceTime}_k(t) \propto \sum_{e \in \mathcal{A}_k(t)} \frac{\text{Size}(e)}{B_k} + \frac{\text{BatchSize}_k(t) \times \text{Compute}(e)}{\text{TensorCore}_k}
-  $$
+  $$\text{ServiceTime}_k(t) \propto \sum_{e \in \mathcal{A}_k(t)} \frac{\text{Size}(e)}{B_k} + \frac{\text{BatchSize}_k(t) \times \text{Compute}(e)}{\text{TensorCore}_k}$$
 
   由于解码阶段 Batch Size 较小，第一项（加载权重的显存开销）通常占主导地位。
   - 因此，我们必须引入一个非凸的容量约束：
 
-  $$
-  \sum_{e \in \mathcal{E}_k} \dot{S}_e(t) \le \mu_{eff}(|\mathcal{A}_k(t)|)
-  $$
+  $$\sum_{e \in \mathcal{E}_k} \dot{S}_e(t) \le \mu_{eff}(|\mathcal{A}_k(t)|)$$
 
   其中 $\mu_{eff}$ 是随着激活专家数量增加而降低的有效吞吐量函数。这是对传统 Fluid Model 的重大修正，直接响应了 Metro 的发现。
 
@@ -166,9 +158,7 @@ $$
 
 构建如下的瞬时优化问题：
 
-$$
-\max_{\pi} \quad \Phi(t) = \underbrace{\sum_{j} \text{Quality}(j, \pi_j)}_{\text{Semantic Utility}} - \eta \cdot \underbrace{\sum_{k} \text{Congestion}(k)}_{\text{System Cost}}
-$$
+$$\max_{\pi} \quad \Phi(t) = \underbrace{\sum_{j} \text{Quality}(j, \pi_j)}_{\text{Semantic Utility}} - \eta \cdot \underbrace{\sum_{k} \text{Congestion}(k)}_{\text{System Cost}}$$
 
 - **语义效用 (Semantic Utility)**:
   - 对于 Token $j$ 和专家 $e$，原始的 Gating Score $s_{je} = x_j^T W_e$ 反映了专家 $e$ 对该 Token 的重要性。
@@ -199,9 +189,7 @@ $$
 1. **获取状态**： 读取所有专家的当前队列深度 $Q_e(t)$。
 2. **计算修正分数 (Adjusted Score)**：
 
-   $$
-   \tilde{S}_{je} = \underbrace{x_j^T W_e}_{\text{Raw Score}} - \alpha \cdot \underbrace{Q_e(t)}_{\text{Backpressure}} - \gamma \cdot \underbrace{\mathbb{I}(L(e) \ne L(j))}_{\text{Locality}}
-   $$
+   $$\tilde{S}_{je} = \underbrace{x_j^T W_e}_{\text{Raw Score}} - \alpha \cdot \underbrace{Q_e(t)}_{\text{Backpressure}} - \gamma \cdot \underbrace{\mathbb{I}(L(e) \ne L(j))}_{\text{Locality}}$$
 
    其中：
    - $\alpha$ 是控制“稳定性 vs 质量”权衡的超参数。
@@ -221,9 +209,7 @@ $$
 
 我们需要在目标函数中加入一个项，鼓励 Token “抱团”。
 
-$$
-\tilde{S}_{je} = x_j^T W_e - \alpha Q_e(t) + \delta \cdot \underbrace{\mathbb{I}(e \in \text{ActiveSet}_k(t))}_{\text{Cache Hit}}
-$$
+$$\tilde{S}_{je} = x_j^T W_e - \alpha Q_e(t) + \delta \cdot \underbrace{\mathbb{I}(e \in \text{ActiveSet}_k(t))}_{\text{Cache Hit}}$$
 
 - **ActiveSet$_k(t)$**：指 GPU $k$ 上当前显存中已经加载的（或即将在本 Batch 使用的）专家集合。
 - **机制**： 如果专家 $e$ 已经被该 GPU 上的其他 Token 选中了，那么路由给它的边际成本很低（不需要重新加载权重），因此给予一个奖励 $\delta$。
