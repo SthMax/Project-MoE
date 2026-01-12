@@ -84,9 +84,8 @@ REAP 的 Theorem 1 表明：
 
 你可以定义一个轻量级的 **routing fidelity loss** 作为 SLI（Service Level Indicator）：
 
-\[
-\text{Fidelity} = \frac{1}{|\mathcal{K}_{\text{orig}}|} \sum_{e \in \mathcal{K}_{\text{new}}} \max_{e' \in \mathcal{K}_{\text{orig}}} \text{sim}(e, e')
-\]
+
+$$\text{Fidelity} = \frac{1}{|\mathcal{K}_{\text{orig}}|} \sum_{e \in \mathcal{K}_{\text{new}}} \max_{e' \in \mathcal{K}_{\text{orig}}} \text{sim}(e, e')$$
 
 其中 \( \text{sim}(e, e') \) 可用 profiling 阶段的 activation cosine similarity。
 
