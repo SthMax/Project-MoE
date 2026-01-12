@@ -32,7 +32,10 @@ arxiv: [ExpertFlow: Adaptive Expert Scheduling and Memory Coordination for Effic
 local: [[Shen et al. - 2025 - ExpertFlow Adaptive Expert Scheduling and Memory Coordination for Efficient MoE Inference.pdf]]
 
 
+## REAP the Experts: Why Pruning Prevails for One-Shot MoE compression
 
+arxiv: http://arxiv.org/abs/2510.13999
+local: [[Lasby et al. - 2025 - REAP the Experts Why Pruning Prevails for One-Shot MoE compression.pdf]]
 
 # Fluid Approximation Related
 

@@ -3,8 +3,9 @@
 ## Folder Structure
 
 ### Chat
+
 LLM Chats & Guidance for the project
-Naming Convention: yyddmm Model-name (Optional Topic)
+Naming Convention: `yyddmm Model-name (Optional Topic)`
 
 ### Code
 Code Repository
