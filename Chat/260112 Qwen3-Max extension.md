@@ -35,26 +35,25 @@ REAP 论文的核心发现之一就是：
 
 #### Step 1: Profiling Phase
 - 在 calibration dataset 上运行 MoE，记录：
-  - 原始 router logits \( r_e(x) \) for each token \( x \) and expert \( e \)
+  - 原始 router logits $r_e(x)$ for each token $x$ and expert $e$
   - 专家激活频率、功能相似性（可通过 activation PCA 或 cosine similarity 估计）
 
 #### Step 2: Online Scheduling with Quality-Aware Rerouting
-当 token 到达，原计划路由到专家集 \( \mathcal{K} = \text{top-k}(r_e) \)，但其中某些专家所在 GPU 负载过高。
+当 token 到达，原计划路由到专家集 $\mathcal{K} = \text{top-k}(r_e)$，但其中某些专家所在 GPU 负载过高。
 
 此时，**不要直接替换为任意低负载专家**，而是：
 
-1. **定义候选集** \( \mathcal{C} \)：
+1. **定义候选集** $\mathcal{C}$：
    - 包含原 top-k 专家；
    - 加上与它们 **功能相近** 的低负载专家（基于 profiling 阶段构建的 expert affinity graph）；
-   - 限制 \( |\mathcal{C}| \leq k + \delta \)（如 \( \delta = 2 \)），避免搜索爆炸。
+   - 限制 $|\mathcal{C}| \leq k + \delta$（如 $\delta = 2$），避免搜索爆炸。
 
 2. **定义扰动后的 score**：
-   \[
-   s_e = r_e(x) - \beta \cdot Q_g(e)
-   \]
-   其中 \( Q_g(e) \) 是专家 \( e \) 所在 GPU \( g \) 的队列长度（或 shadow price），\( \beta \) 是 trade-off 参数。
+ $$s_e = r_e(x) - \beta \cdot Q_g(e)$$
+ 
+   其中 $Q_g(e)$ 是专家 $e$ 所在 GPU $g$ 的队列长度（或 shadow price），$\beta$ 是 trade-off 参数。
 
-3. **从 \( \mathcal{C} \) 中选 new top-k based on \( s_e \)**。
+3. **从 $\mathcal{C}$ 中选 new top-k based on $s_e$**。
 
 4. **约束**：若新选专家与原 top-k 的平均 activation cosine similarity < threshold（如 0.8），则 fallback to original routing（宁可等，也不牺牲质量）。
 
@@ -87,13 +86,11 @@ REAP 的 Theorem 1 表明：
 
 $$\text{Fidelity} = \frac{1}{|\mathcal{K}_{\text{orig}}|} \sum_{e \in \mathcal{K}_{\text{new}}} \max_{e' \in \mathcal{K}_{\text{orig}}} \text{sim}(e, e')$$
 
-其中 \( \text{sim}(e, e') \) 可用 profiling 阶段的 activation cosine similarity。
+其中  $\text{sim}(e, e')$ 可用 profiling 阶段的 activation cosine similarity。
 
 在你的 Fluid Model 中，可将此 fidelity 作为 **SLI penalty term**（类似你师兄 work 中的 SLI-aware LP），形成多目标优化：
 
-\[
-\max \quad \text{Throughput} - \alpha \cdot \text{CommCost} - \gamma \cdot (1 - \text{Fidelity})
-\]
+$$\max \quad \text{Throughput} - \alpha \cdot \text{CommCost} - \gamma \cdot (1 - \text{Fidelity})$$
 
 这样，你的策略在理论上就 **同时保证系统效率与模型质量**。
 
