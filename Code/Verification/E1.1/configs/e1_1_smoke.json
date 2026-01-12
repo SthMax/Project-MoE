@@ -1,0 +1,39 @@
+{
+  "run_id": "2026-01-12_smoke",
+  "model": {
+    "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 8,
+    "dtype": "auto",
+    "trust_remote_code": true
+  },
+  "generation": {
+    "max_tokens": 1,
+    "temperature": 0.0
+  },
+  "data": {
+    "seed": 1234,
+    "n_examples": 200,
+    "max_prompt_tokens": 512
+  },
+  "domains": {
+    "wikitext": {
+      "hf_dataset": {
+        "path": "wikitext",
+        "name": "wikitext-103-raw-v1",
+        "split": "train",
+        "text_field": "text"
+      }
+    },
+    "humaneval": {
+      "hf_dataset": {
+        "path": "openai_humaneval",
+        "name": null,
+        "split": "test",
+        "text_field": "prompt"
+      }
+    }
+  },
+  "output_root": "Code/Verification/E1.1/outputs/runs"
+}
