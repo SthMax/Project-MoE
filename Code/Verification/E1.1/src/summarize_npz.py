@@ -118,7 +118,27 @@ def summarize_npz(npz_path: Path) -> dict:
         )
 
     if not layer_rows:
-        raise RuntimeError(f"No valid layers found (tokens_processed all <=0?) in {npz_path}")
+        # Total summary should not normally be empty, but keep this robust.
+        return {
+            "npz": str(npz_path),
+            "num_layers": int(num_layers),
+            "num_experts": int(num_experts),
+            "k_experts": int(k_experts),
+            "total_tokens": 0,
+            "metrics_token_weighted": {
+                "shared_frac": 0.0,
+                "top1_entropy_norm": 0.0,
+                "top1_gini": 0.0,
+                "top1_cv": 0.0,
+                "top1_max_share": 0.0,
+                "topk_entropy_norm": 0.0,
+                "topk_gini": 0.0,
+                "topk_cv": 0.0,
+                "topk_max_share": 0.0,
+            },
+            "layers": [],
+            "empty": True,
+        }
 
     # Token-weighted global summaries.
     tokens = np.array([r["tokens"] for r in layer_rows], dtype=np.float64)
@@ -235,7 +255,28 @@ def summarize_npz_phase(npz_path: Path, phase: str) -> dict:
         )
 
     if not layer_rows:
-        raise RuntimeError(f"No valid layers found (tokens_processed all <=0?) in {npz_path}")
+        # Phase may legitimately have zero tokens (e.g., decode when max_tokens=1).
+        return {
+            "npz": str(npz_path),
+            "phase": phase,
+            "num_layers": int(num_layers),
+            "num_experts": int(num_experts),
+            "k_experts": int(k_experts),
+            "total_tokens": 0,
+            "metrics_token_weighted": {
+                "shared_frac": 0.0,
+                "top1_entropy_norm": 0.0,
+                "top1_gini": 0.0,
+                "top1_cv": 0.0,
+                "top1_max_share": 0.0,
+                "topk_entropy_norm": 0.0,
+                "topk_gini": 0.0,
+                "topk_cv": 0.0,
+                "topk_max_share": 0.0,
+            },
+            "layers": [],
+            "empty": True,
+        }
 
     tokens = np.array([r["tokens"] for r in layer_rows], dtype=np.float64)
     w = tokens / tokens.sum()

@@ -161,7 +161,7 @@ def main() -> None:
     np.savez_compressed(
         out_path,
         layer_names=np.array(merged_layer_names, dtype=object),
-        **{k: v for k, v in merged.items()},
+        **{k: v for k, v in merged.items() if k not in {"k_experts", "num_experts"}},
         **{k: np.int64(v) for k, v in scalar_meta.items()},
     )
 
