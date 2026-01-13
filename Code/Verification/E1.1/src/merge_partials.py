@@ -20,6 +20,22 @@ def _as_list_str(arr) -> list[str]:
     return [str(arr)]
 
 
+def _is_counter_matrix(name: str, arr: np.ndarray) -> bool:
+    return name.startswith("cnt_") and isinstance(arr, np.ndarray) and arr.ndim == 2
+
+
+def _is_counter_vector(name: str, arr: np.ndarray) -> bool:
+    return (
+        (name.startswith("tokens_") or name.startswith("cnt_shared"))
+        and isinstance(arr, np.ndarray)
+        and arr.ndim == 1
+    )
+
+
+def _is_scalar_meta(name: str, arr: np.ndarray) -> bool:
+    return name in {"k_experts", "num_experts"} and isinstance(arr, np.ndarray) and arr.ndim == 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_dir", required=True, help=".../outputs/runs/<run_id>")
@@ -83,66 +99,108 @@ def main() -> None:
         )
 
     merged_layer_names: list[str] | None = None
-    merged_cnt_topk = None
-    merged_cnt_top1 = None
-    merged_cnt_shared = None
-    merged_tokens_processed = None
-    k_experts = None
+    merged: dict[str, np.ndarray] = {}
+    scalar_meta: dict[str, int] = {}
 
     for p, data in selected_items:
         layer_names = _as_list_str(data.get("layer_names"))
 
-        cnt_topk = data["cnt_topk"].astype(np.int64)
-        cnt_top1 = data["cnt_top1"].astype(np.int64)
-        cnt_shared = data["cnt_shared"].astype(np.int64)
-        tokens_processed = data["tokens_processed"].astype(np.int64)
-        k = int(data.get("k_experts", -1))
-
         if merged_layer_names is None:
             merged_layer_names = layer_names
-            merged_cnt_topk = cnt_topk
-            merged_cnt_top1 = cnt_top1
-            merged_cnt_shared = cnt_shared
-            merged_tokens_processed = tokens_processed
-            k_experts = k
         else:
-            # Within a selected group, layer_names must match.
             if layer_names != merged_layer_names:
                 raise RuntimeError(
                     f"Internal error: selected partials still mismatch layer_names. File={p.name}"
                 )
-            if k != k_experts:
-                raise RuntimeError(f"k_experts mismatch: {k} vs {k_experts}")
 
-            merged_cnt_topk += cnt_topk
-            merged_cnt_top1 += cnt_top1
-            merged_cnt_shared += cnt_shared
-            merged_tokens_processed += tokens_processed
+        # Merge scalar meta.
+        for key in ("k_experts", "num_experts"):
+            if key in data:
+                v = int(np.asarray(data[key]).item())
+                if key in scalar_meta and scalar_meta[key] != v:
+                    raise RuntimeError(f"{key} mismatch: {scalar_meta[key]} vs {v} (file={p.name})")
+                scalar_meta[key] = v
+
+        # Merge all counter arrays we recognize.
+        for key, val in data.items():
+            if key == "layer_names":
+                continue
+            if not isinstance(val, np.ndarray):
+                continue
+
+            if _is_counter_matrix(key, val) or _is_counter_vector(key, val) or _is_scalar_meta(key, val):
+                arr = val
+                # Normalize dtypes.
+                if arr.dtype.kind in {"i", "u"}:
+                    arr = arr.astype(np.int64, copy=False)
+                elif arr.dtype.kind == "f":
+                    arr = arr.astype(np.float64, copy=False)
+
+                if key in merged:
+                    if merged[key].shape != arr.shape:
+                        raise RuntimeError(
+                            f"Shape mismatch for {key}: {merged[key].shape} vs {arr.shape} (file={p.name})"
+                        )
+                    merged[key] += arr
+                else:
+                    merged[key] = arr.copy()
 
     assert merged_layer_names is not None
+
+    # Backward-compat: if phase-split exists but total is missing, synthesize totals.
+    if "cnt_top1" not in merged and "cnt_top1_prefill" in merged and "cnt_top1_decode" in merged:
+        merged["cnt_top1"] = merged["cnt_top1_prefill"] + merged["cnt_top1_decode"]
+    if "cnt_topk" not in merged and "cnt_topk_prefill" in merged and "cnt_topk_decode" in merged:
+        merged["cnt_topk"] = merged["cnt_topk_prefill"] + merged["cnt_topk_decode"]
+    if "tokens_processed" not in merged and "tokens_prefill" in merged and "tokens_decode" in merged:
+        merged["tokens_processed"] = merged["tokens_prefill"] + merged["tokens_decode"]
+    if "cnt_shared" not in merged and "cnt_shared_prefill" in merged and "cnt_shared_decode" in merged:
+        merged["cnt_shared"] = merged["cnt_shared_prefill"] + merged["cnt_shared_decode"]
 
     out_path = domain_dir / "routing_stats_merged.npz"
     np.savez_compressed(
         out_path,
         layer_names=np.array(merged_layer_names, dtype=object),
-        cnt_topk=merged_cnt_topk,
-        cnt_top1=merged_cnt_top1,
-        cnt_shared=merged_cnt_shared,
-        tokens_processed=merged_tokens_processed,
-        k_experts=np.int64(k_experts),
+        **{k: v for k, v in merged.items()},
+        **{k: np.int64(v) for k, v in scalar_meta.items()},
     )
 
-    # Print sanity checks.
-    sum_topk = merged_cnt_topk.sum(axis=1)
-    sum_top1 = merged_cnt_top1.sum(axis=1)
-    expected_topk = merged_tokens_processed * int(k_experts)
-
-    ok_topk = np.all(sum_topk == expected_topk)
-    ok_top1 = np.all(sum_top1 == merged_tokens_processed)
-
     print(f"[E1.1] Merged {len(selected_items)} partials -> {out_path}")
-    print(f"[E1.1] Check topk sum == tokens*k: {ok_topk}")
-    print(f"[E1.1] Check top1 sum == tokens: {ok_top1}")
+
+    # Sanity checks (total + optional phase split).
+    ok_topk = True
+    ok_top1 = True
+    k_experts = int(scalar_meta.get("k_experts", -1))
+
+    def _check(prefix: str) -> tuple[bool, bool]:
+        cnt_top1_key = f"cnt_top1{prefix}"
+        cnt_topk_key = f"cnt_topk{prefix}"
+        tokens_key = f"tokens{prefix}" if prefix else "tokens_processed"
+        if cnt_top1_key not in merged or cnt_topk_key not in merged or tokens_key not in merged:
+            return True, True
+        cnt_top1 = merged[cnt_top1_key]
+        cnt_topk = merged[cnt_topk_key]
+        tokens = merged[tokens_key]
+        sum_top1 = cnt_top1.sum(axis=1)
+        sum_topk = cnt_topk.sum(axis=1)
+        ok1 = np.all(sum_top1 == tokens)
+        okk = True
+        if k_experts > 0:
+            okk = np.all(sum_topk == tokens * k_experts)
+        return bool(okk), bool(ok1)
+
+    ok_topk, ok_top1 = _check("")
+    ok_topk_p, ok_top1_p = _check("_prefill")
+    ok_topk_d, ok_top1_d = _check("_decode")
+
+    print(f"[E1.1] Check total topk sum == tokens*k: {ok_topk}")
+    print(f"[E1.1] Check total top1 sum == tokens: {ok_top1}")
+    if "cnt_top1_prefill" in merged:
+        print(f"[E1.1] Check prefill topk sum == tokens*k: {ok_topk_p}")
+        print(f"[E1.1] Check prefill top1 sum == tokens: {ok_top1_p}")
+    if "cnt_top1_decode" in merged:
+        print(f"[E1.1] Check decode topk sum == tokens*k: {ok_topk_d}")
+        print(f"[E1.1] Check decode top1 sum == tokens: {ok_top1_d}")
 
     meta_path = domain_dir / "meta.json"
     if meta_path.exists():
@@ -152,6 +210,12 @@ def main() -> None:
         meta["ignored_partials_count"] = len(partial_files) - len(selected_items)
         meta["sanity_ok_topk"] = bool(ok_topk)
         meta["sanity_ok_top1"] = bool(ok_top1)
+        if "cnt_top1_prefill" in merged:
+            meta["sanity_ok_topk_prefill"] = bool(ok_topk_p)
+            meta["sanity_ok_top1_prefill"] = bool(ok_top1_p)
+        if "cnt_top1_decode" in merged:
+            meta["sanity_ok_topk_decode"] = bool(ok_topk_d)
+            meta["sanity_ok_top1_decode"] = bool(ok_top1_d)
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

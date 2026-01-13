@@ -51,6 +51,20 @@ def _load_domain_merged(run_dir: Path, domain: str) -> dict:
     cnt_topk = np.asarray(data["cnt_topk"]).astype(np.int64)
     tokens_processed = np.asarray(data["tokens_processed"]).astype(np.int64)
     k_experts = int(np.asarray(data["k_experts"]).item())
+
+    # Optional phase-split.
+    cnt_top1_prefill = (
+        np.asarray(data["cnt_top1_prefill"]).astype(np.int64) if "cnt_top1_prefill" in data else None
+    )
+    cnt_topk_prefill = (
+        np.asarray(data["cnt_topk_prefill"]).astype(np.int64) if "cnt_topk_prefill" in data else None
+    )
+    cnt_top1_decode = (
+        np.asarray(data["cnt_top1_decode"]).astype(np.int64) if "cnt_top1_decode" in data else None
+    )
+    cnt_topk_decode = (
+        np.asarray(data["cnt_topk_decode"]).astype(np.int64) if "cnt_topk_decode" in data else None
+    )
     return {
         "domain": domain,
         "npz": str(npz_path),
@@ -58,6 +72,10 @@ def _load_domain_merged(run_dir: Path, domain: str) -> dict:
         "cnt_top1": cnt_top1,
         "cnt_topk": cnt_topk,
         "tokens_processed": tokens_processed,
+        "cnt_top1_prefill": cnt_top1_prefill,
+        "cnt_topk_prefill": cnt_topk_prefill,
+        "cnt_top1_decode": cnt_top1_decode,
+        "cnt_topk_decode": cnt_topk_decode,
         "k_experts": k_experts,
     }
 
@@ -104,30 +122,46 @@ def main() -> None:
         da = dom_data[a]
         db = dom_data[b]
 
-        js_top1 = []
-        js_topk = []
-        for l in range(num_layers):
-            pa = _prob(da["cnt_top1"][l])
-            pb = _prob(db["cnt_top1"][l])
-            qa = _prob(da["cnt_topk"][l])
-            qb = _prob(db["cnt_topk"][l])
-            js_top1.append(_js_divergence(pa, pb))
-            js_topk.append(_js_divergence(qa, qb))
-
-        js_top1 = np.asarray(js_top1, dtype=np.float64)
-        js_topk = np.asarray(js_topk, dtype=np.float64)
-
-        comparisons.append(
-            {
-                "pair": [a, b],
-                "js_top1_mean": float(js_top1.mean()),
-                "js_top1_p50": float(np.quantile(js_top1, 0.50)),
-                "js_top1_p90": float(np.quantile(js_top1, 0.90)),
-                "js_topk_mean": float(js_topk.mean()),
-                "js_topk_p50": float(np.quantile(js_topk, 0.50)),
-                "js_topk_p90": float(np.quantile(js_topk, 0.90)),
+        def _js_for(cnt1_a, cnt1_b, cntk_a, cntk_b):
+            js1 = []
+            jsk = []
+            for l in range(num_layers):
+                pa = _prob(cnt1_a[l])
+                pb = _prob(cnt1_b[l])
+                qa = _prob(cntk_a[l])
+                qb = _prob(cntk_b[l])
+                js1.append(_js_divergence(pa, pb))
+                jsk.append(_js_divergence(qa, qb))
+            js1 = np.asarray(js1, dtype=np.float64)
+            jsk = np.asarray(jsk, dtype=np.float64)
+            return {
+                "js_top1_mean": float(js1.mean()),
+                "js_top1_p50": float(np.quantile(js1, 0.50)),
+                "js_top1_p90": float(np.quantile(js1, 0.90)),
+                "js_topk_mean": float(jsk.mean()),
+                "js_topk_p50": float(np.quantile(jsk, 0.50)),
+                "js_topk_p90": float(np.quantile(jsk, 0.90)),
             }
-        )
+
+        entry = {"pair": [a, b], "total": _js_for(da["cnt_top1"], db["cnt_top1"], da["cnt_topk"], db["cnt_topk"])}
+
+        # Optional phases.
+        if da.get("cnt_top1_prefill") is not None and db.get("cnt_top1_prefill") is not None:
+            entry["prefill"] = _js_for(
+                da["cnt_top1_prefill"],
+                db["cnt_top1_prefill"],
+                da["cnt_topk_prefill"],
+                db["cnt_topk_prefill"],
+            )
+        if da.get("cnt_top1_decode") is not None and db.get("cnt_top1_decode") is not None:
+            entry["decode"] = _js_for(
+                da["cnt_top1_decode"],
+                db["cnt_top1_decode"],
+                da["cnt_topk_decode"],
+                db["cnt_topk_decode"],
+            )
+
+        comparisons.append(entry)
 
     # Pull in per-domain summaries if present.
     per_domain = {}

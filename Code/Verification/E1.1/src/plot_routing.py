@@ -60,6 +60,12 @@ def main() -> None:
     parser.add_argument("--run_dir", default=None)
     parser.add_argument("--domain", default=None)
     parser.add_argument("--top_experts", type=int, default=50)
+    parser.add_argument(
+        "--phase",
+        default="total",
+        choices=["total", "prefill", "decode"],
+        help="Which phase to plot. If phase counters are missing, falls back to total.",
+    )
     args = parser.parse_args()
 
     if args.npz:
@@ -84,11 +90,37 @@ def main() -> None:
 
     data = _load_npz(npz_path)
     layer_names = _as_list_str(data.get("layer_names"))
-    cnt_top1 = np.asarray(data["cnt_top1"]).astype(np.int64)
-    cnt_topk = np.asarray(data["cnt_topk"]).astype(np.int64)
-    cnt_shared = np.asarray(data["cnt_shared"]).astype(np.int64)
-    tokens = np.asarray(data["tokens_processed"]).astype(np.int64)
     k_experts = int(np.asarray(data["k_experts"]).item())
+
+    phase = (args.phase or "total").lower()
+    if phase == "total":
+        cnt_top1 = np.asarray(data["cnt_top1"]).astype(np.int64)
+        cnt_topk = np.asarray(data["cnt_topk"]).astype(np.int64)
+        tokens = np.asarray(data["tokens_processed"]).astype(np.int64)
+        cnt_shared = np.asarray(data["cnt_shared"]).astype(np.int64) if "cnt_shared" in data else None
+        phase_suffix = ""
+        phase_title = "total"
+    else:
+        suffix = f"_{phase}"
+        if f"cnt_top1{suffix}" in data and f"cnt_topk{suffix}" in data and f"tokens{suffix}" in data:
+            cnt_top1 = np.asarray(data[f"cnt_top1{suffix}"]).astype(np.int64)
+            cnt_topk = np.asarray(data[f"cnt_topk{suffix}"]).astype(np.int64)
+            tokens = np.asarray(data[f"tokens{suffix}"]).astype(np.int64)
+            cnt_shared = (
+                np.asarray(data[f"cnt_shared{suffix}"]).astype(np.int64)
+                if f"cnt_shared{suffix}" in data
+                else None
+            )
+            phase_suffix = suffix
+            phase_title = phase
+        else:
+            # Fall back to total.
+            cnt_top1 = np.asarray(data["cnt_top1"]).astype(np.int64)
+            cnt_topk = np.asarray(data["cnt_topk"]).astype(np.int64)
+            tokens = np.asarray(data["tokens_processed"]).astype(np.int64)
+            cnt_shared = np.asarray(data["cnt_shared"]).astype(np.int64) if "cnt_shared" in data else None
+            phase_suffix = ""
+            phase_title = f"{phase} (fallback=total)"
 
     num_layers, num_experts = cnt_top1.shape
     log_e = np.log(float(num_experts))
@@ -110,7 +142,7 @@ def main() -> None:
         topk_entropy_norm[l] = _entropy(pk) / log_e if log_e > 0 else 0.0
         top1_max_share[l] = float(p1.max()) if p1.size else 0.0
         topk_max_share[l] = float(pk.max()) if pk.size else 0.0
-        shared_frac[l] = float(cnt_shared[l] / n)
+        shared_frac[l] = float((cnt_shared[l] / n) if cnt_shared is not None else 0.0)
 
     plots_dir = domain_dir / "plots"
     _ensure_dir(plots_dir)
@@ -123,10 +155,10 @@ def main() -> None:
     plt.plot(xs, topk_entropy_norm, label=f"topk entropy / logE (k={k_experts})")
     plt.xlabel("Layer")
     plt.ylabel("Normalized entropy")
-    plt.title("Routing entropy by layer")
+    plt.title(f"Routing entropy by layer ({phase_title})")
     plt.grid(True, alpha=0.2)
     plt.legend()
-    out1 = plots_dir / "entropy_by_layer.png"
+    out1 = plots_dir / f"entropy_by_layer{phase_suffix}.png"
     plt.tight_layout()
     plt.savefig(out1, dpi=160)
     plt.close()
@@ -137,10 +169,10 @@ def main() -> None:
     plt.plot(xs, topk_max_share, label="topk max share")
     plt.xlabel("Layer")
     plt.ylabel("Max expert probability")
-    plt.title("Max expert share by layer")
+    plt.title(f"Max expert share by layer ({phase_title})")
     plt.grid(True, alpha=0.2)
     plt.legend()
-    out2 = plots_dir / "max_share_by_layer.png"
+    out2 = plots_dir / f"max_share_by_layer{phase_suffix}.png"
     plt.tight_layout()
     plt.savefig(out2, dpi=160)
     plt.close()
@@ -150,9 +182,9 @@ def main() -> None:
     plt.plot(xs, shared_frac, label="shared frac")
     plt.xlabel("Layer")
     plt.ylabel("Shared tokens / tokens_processed")
-    plt.title("Shared expert fraction by layer")
+    plt.title(f"Shared expert fraction by layer ({phase_title})")
     plt.grid(True, alpha=0.2)
-    out3 = plots_dir / "shared_frac_by_layer.png"
+    out3 = plots_dir / f"shared_frac_by_layer{phase_suffix}.png"
     plt.tight_layout()
     plt.savefig(out3, dpi=160)
     plt.close()
@@ -174,8 +206,8 @@ def main() -> None:
     plt.colorbar(label="P(expert|layer) (top1, restricted to top-N)")
     plt.xlabel(f"Top-{top_n} experts (by global top1 count)")
     plt.ylabel("Layer")
-    plt.title("Top-1 routing distribution (top experts)")
-    out4 = plots_dir / f"heatmap_top{top_n}_experts_top1.png"
+    plt.title(f"Top-1 routing distribution (top experts; {phase_title})")
+    out4 = plots_dir / f"heatmap_top{top_n}_experts_top1{phase_suffix}.png"
     plt.tight_layout()
     plt.savefig(out4, dpi=160)
     plt.close()
@@ -185,6 +217,29 @@ def main() -> None:
     print(f"  - {out2.name}")
     print(f"  - {out3.name}")
     print(f"  - {out4.name}")
+
+    # 5) Heatmap over top-N experts by global topk usage.
+    # This visualizes overall load (top-k membership), not just the top-1 winner.
+    global_counts_k = cnt_topk.sum(axis=0)
+    top_idx_k = np.argsort(-global_counts_k)[:top_n]
+    mat_k = cnt_topk[:, top_idx_k].astype(np.float64)
+    # normalize rows to probabilities for visualization
+    row_sums_k = mat_k.sum(axis=1, keepdims=True)
+    row_sums_k[row_sums_k == 0] = 1.0
+    mat_k = mat_k / row_sums_k
+
+    plt.figure(figsize=(max(8, top_n * 0.18), 6))
+    plt.imshow(mat_k, aspect="auto", interpolation="nearest")
+    plt.colorbar(label=f"P(expert|layer) (topk, restricted to top-N; k={k_experts})")
+    plt.xlabel(f"Top-{top_n} experts (by global topk count)")
+    plt.ylabel("Layer")
+    plt.title(f"Top-k routing distribution (top experts; {phase_title})")
+    out5 = plots_dir / f"heatmap_top{top_n}_experts_topk{phase_suffix}.png"
+    plt.tight_layout()
+    plt.savefig(out5, dpi=160)
+    plt.close()
+
+    print(f"  - {out5.name}")
 
 
 if __name__ == "__main__":

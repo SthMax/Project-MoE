@@ -52,10 +52,18 @@ for domain in $domains; do
   python Code/Verification/E1.1/src/merge_partials.py --run_dir "$RUN_DIR" --domain "$domain"
 
   echo "[E1.1] Summarize domain=$domain"
-  python Code/Verification/E1.1/src/summarize_npz.py --run_dir "$RUN_DIR" --domain "$domain"
+  python Code/Verification/E1.1/src/summarize_npz.py --run_dir "$RUN_DIR" --domain "$domain" --phase total
+  # Best-effort phase summaries (will fall back to total if missing).
+  python Code/Verification/E1.1/src/summarize_npz.py --run_dir "$RUN_DIR" --domain "$domain" --phase prefill
+  python Code/Verification/E1.1/src/summarize_npz.py --run_dir "$RUN_DIR" --domain "$domain" --phase decode
 
   echo "[E1.1] Plot domain=$domain"
-  python Code/Verification/E1.1/src/plot_routing.py --run_dir "$RUN_DIR" --domain "$domain"
+  python Code/Verification/E1.1/src/plot_routing.py --run_dir "$RUN_DIR" --domain "$domain" --phase total
+  python Code/Verification/E1.1/src/plot_routing.py --run_dir "$RUN_DIR" --domain "$domain" --phase prefill
+  python Code/Verification/E1.1/src/plot_routing.py --run_dir "$RUN_DIR" --domain "$domain" --phase decode
+
+  echo "[E1.1] Analyze domain=$domain"
+  python Code/Verification/E1.1/src/analyze_domain.py --run_dir "$RUN_DIR" --domain "$domain"
 
 done
 
