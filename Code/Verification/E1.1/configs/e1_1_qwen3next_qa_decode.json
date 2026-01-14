@@ -1,0 +1,86 @@
+{
+  "run_id": null,
+  "model": {
+    "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 8,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true
+  },
+  "generation": {
+    "max_tokens": 32,
+    "temperature": 0.0
+  },
+  "data": {
+    "seed": 1234,
+    "n_examples": 3000,
+    "max_prompt_tokens": 1024,
+    "allow_fewer_examples": true
+  },
+  "domains": {
+    "simpleqa_en": {
+      "hf_dataset": {
+        "path": "OpenEvals/SimpleQA",
+        "name": "default",
+        "split": "test",
+        "text_field": "problem"
+      },
+      "n_examples": 4326,
+      "allow_fewer_examples": true
+    },
+    "simpleqa_zh": {
+      "hf_dataset": {
+        "path": "OpenStellarTeam/Chinese-SimpleQA",
+        "name": "default",
+        "split": "train",
+        "text_field": "question"
+      },
+      "n_examples": 3000,
+      "allow_fewer_examples": true
+    },
+    "truthfulqa_generation": {
+      "hf_dataset": {
+        "path": "truthfulqa/truthful_qa",
+        "name": "generation",
+        "split": "validation",
+        "text_field": "question"
+      },
+      "n_examples": 790,
+      "allow_fewer_examples": true
+    },
+    "nq_open": {
+      "hf_dataset": {
+        "path": "google-research-datasets/nq_open",
+        "name": "nq_open",
+        "split": "validation",
+        "text_field": "question"
+      },
+      "n_examples": 2000,
+      "allow_fewer_examples": true
+    },
+    "gsm8k": {
+      "hf_dataset": {
+        "path": "gsm8k",
+        "name": "main",
+        "split": "test",
+        "text_field": "question"
+      },
+      "n_examples": 1319,
+      "allow_fewer_examples": true
+    },
+    "humaneval": {
+      "hf_dataset": {
+        "path": "openai_humaneval",
+        "name": null,
+        "split": "test",
+        "text_field": "prompt"
+      },
+      "n_examples": 164,
+      "allow_fewer_examples": true
+    }
+  },
+  "output_root": "Code/Verification/E1.1/outputs/runs"
+}

@@ -32,8 +32,16 @@ def _is_counter_vector(name: str, arr: np.ndarray) -> bool:
     )
 
 
+def _is_debug_vector(name: str, arr: np.ndarray) -> bool:
+    return name.startswith("dbg_") and isinstance(arr, np.ndarray) and arr.ndim == 1
+
+
 def _is_scalar_meta(name: str, arr: np.ndarray) -> bool:
     return name in {"k_experts", "num_experts"} and isinstance(arr, np.ndarray) and arr.ndim == 0
+
+
+def _is_debug_scalar(name: str, arr: np.ndarray) -> bool:
+    return name.startswith("dbg_") and isinstance(arr, np.ndarray) and arr.ndim == 0
 
 
 def main() -> None:
@@ -128,7 +136,13 @@ def main() -> None:
             if not isinstance(val, np.ndarray):
                 continue
 
-            if _is_counter_matrix(key, val) or _is_counter_vector(key, val) or _is_scalar_meta(key, val):
+            if (
+                _is_counter_matrix(key, val)
+                or _is_counter_vector(key, val)
+                or _is_debug_vector(key, val)
+                or _is_scalar_meta(key, val)
+                or _is_debug_scalar(key, val)
+            ):
                 arr = val
                 # Normalize dtypes.
                 if arr.dtype.kind in {"i", "u"}:
