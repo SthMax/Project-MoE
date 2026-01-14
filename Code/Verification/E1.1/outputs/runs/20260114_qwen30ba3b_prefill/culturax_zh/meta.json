@@ -1,0 +1,39 @@
+{
+  "run_id": "20260114_qwen30ba3b_prefill",
+  "domain": "culturax_zh",
+  "model": {
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 16,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true
+  },
+  "generation": {
+    "max_tokens": 1,
+    "temperature": 0.0
+  },
+  "data": {
+    "seed": 1234,
+    "n_examples": 5000,
+    "max_prompt_tokens": 1024,
+    "allow_fewer_examples": true
+  },
+  "n_examples_requested": 5000,
+  "n_examples_used": 5000,
+  "vllm_file": "/home/zhhuang/sthmax/git/vllm/vllm/__init__.py",
+  "vllm_version": "0.13.1.dev0+g72506c983.d20260113",
+  "elapsed_sec": 76.06716871261597,
+  "partials_dir": "/home/zhhuang/sthmax/git/Project-MoE/Code/Verification/E1.1/outputs/runs/20260114_qwen30ba3b_prefill/culturax_zh/partials",
+  "merged_npz": "Code/Verification/E1.1/outputs/runs/20260114_qwen30ba3b_prefill/culturax_zh/routing_stats_merged.npz",
+  "partials_count": 1,
+  "ignored_partials_count": 0,
+  "sanity_ok_topk": true,
+  "sanity_ok_top1": true,
+  "sanity_ok_topk_prefill": true,
+  "sanity_ok_top1_prefill": true,
+  "sanity_ok_topk_decode": true,
+  "sanity_ok_top1_decode": true
+}

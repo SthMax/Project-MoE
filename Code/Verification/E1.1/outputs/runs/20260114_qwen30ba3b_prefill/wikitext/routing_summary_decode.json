@@ -1,0 +1,21 @@
+{
+  "npz": "Code/Verification/E1.1/outputs/runs/20260114_qwen30ba3b_prefill/wikitext/routing_stats_merged.npz",
+  "phase": "decode",
+  "num_layers": 48,
+  "num_experts": 128,
+  "k_experts": 8,
+  "total_tokens": 0,
+  "metrics_token_weighted": {
+    "shared_frac": 0.0,
+    "top1_entropy_norm": 0.0,
+    "top1_gini": 0.0,
+    "top1_cv": 0.0,
+    "top1_max_share": 0.0,
+    "topk_entropy_norm": 0.0,
+    "topk_gini": 0.0,
+    "topk_cv": 0.0,
+    "topk_max_share": 0.0
+  },
+  "layers": [],
+  "empty": true
+}
