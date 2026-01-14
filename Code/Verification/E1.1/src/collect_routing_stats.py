@@ -163,6 +163,8 @@ def main() -> None:
     _ensure_dir(partials_dir)
 
     # Enable vLLM-side routing stats instrumentation.
+    # IMPORTANT: this must be set before constructing vllm.LLM so worker
+    # processes inherit the env vars.
     os.environ["VLLM_MOE_STATS_DIR"] = str(partials_dir)
     os.environ["VLLM_MOE_STATS_DOMAIN"] = domain
     # Default behavior in vLLM patch: only rank0 writes stats.
@@ -202,8 +204,10 @@ def main() -> None:
     )
 
     t0 = time.time()
-    llm.generate(prompts, sampling_params)
-    t1 = time.time()
+    try:
+        llm.generate(prompts, sampling_params)
+    finally:
+        t1 = time.time()
 
     # Force flush if the module exists (atexit will also flush).
     try:
@@ -212,6 +216,10 @@ def main() -> None:
         _moe_stats.flush(reason="collect_routing_stats_end")
     except Exception:
         pass
+
+    # Note: we intentionally do not unset env vars here because worker processes
+    # are already running with their inherited environment. Any additional
+    # shielding of warmup/dummy runs should be done inside vLLM itself.
 
     meta = {
         "run_id": run_id,

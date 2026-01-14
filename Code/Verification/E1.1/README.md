@@ -6,8 +6,8 @@ This folder contains the **executable pipeline** for Experiment 1.1 described in
 ## Environment
 
 - vLLM is expected to be importable from the **conda env** `moe`.
-- You indicated vLLM source is at `~/sthmax/git/vllm`.
-- This repo creates a workspace-local symlink at `external/vllm` pointing to that path, so we can patch vLLM for instrumentation.
+- vLLM source is expected at `~/sthmax/git/vllm`.
+- This repo uses a workspace-local symlink at `external/vllm` pointing to that path (so you can patch vLLM for instrumentation, while still keeping vLLM as its own repo).
 
 ### Stability notes (TP=4 on A100)
 
@@ -28,9 +28,14 @@ For each domain (dataset), we write a merged routing stats file:
 Schema highlights:
 - `cnt_topk[L,E]`: token counts for **non-shared** experts (top-k membership)
 - `cnt_top1[L,E]`: token counts for **non-shared** experts (top-1)
-- `cnt_shared[L]`: token counts for the **shared expert** (counted separately)
+- `cnt_shared[L]`: token counts for the **shared expert** (counted separately; may be absent for models without shared experts)
 - `tokens_processed[L]`: number of tokens routed at that MoE layer
 - `layer_names[L]`: the vLLM layer identifiers (strings)
+
+Phase-split (new; written into the same `.npz` when available):
+- `cnt_topk_prefill[L,E]`, `cnt_top1_prefill[L,E]`, `tokens_prefill[L]`
+- `cnt_topk_decode[L,E]`, `cnt_top1_decode[L,E]`, `tokens_decode[L]`
+- `cnt_shared_prefill[L]`, `cnt_shared_decode[L]` (optional)
 
 ## Quickstart (2-domain smoke)
 
@@ -99,16 +104,22 @@ For very large HF datasets (e.g., `mc4`), set in the domain's `hf_dataset`:
 
 Per domain (under `outputs/runs/<run_id>/<domain>/`):
 - `routing_stats_merged.npz`: merged counters
-- `routing_summary.json`: token-weighted metrics + per-layer metrics
-- `routing_summary_layers.csv`: per-layer table for quick spreadsheet work
+- `routing_summary.json`: token-weighted metrics + per-layer metrics (total)
+- `routing_summary_prefill.json`: same metrics for prefill (if phase counters exist; otherwise falls back to total)
+- `routing_summary_decode.json`: same metrics for decode (may be empty when `max_tokens=1`)
+- `routing_summary_layers.csv`: per-layer table (total)
+- `routing_summary_layers_prefill.csv`: per-layer table (prefill)
+- `routing_summary_layers_decode.csv`: per-layer table (decode)
+- `routing_analysis.json`: detailed per-layer top experts + outlier flags (total/prefill/decode)
 - `plots/`:
-  - `entropy_by_layer.png`
-  - `max_share_by_layer.png`
-  - `shared_frac_by_layer.png`
-  - `heatmap_top50_experts_top1.png`
+  - `entropy_by_layer.png` (+ `_prefill` / `_decode` variants)
+  - `max_share_by_layer.png` (+ `_prefill` / `_decode` variants)
+  - `shared_frac_by_layer.png` (+ `_prefill` / `_decode` variants)
+  - `heatmap_top50_experts_top1.png` (+ `_prefill` / `_decode` variants)
+  - `heatmap_top50_experts_topk.png` (+ `_prefill` / `_decode` variants)
 
 Per run (under `outputs/runs/<run_id>/`):
-- `run_analysis.json`: pairwise cross-domain JS divergence (top1/topk) across layers
+- `run_analysis.json`: pairwise cross-domain JS divergence across layers (total, and prefill/decode when available)
 
 Dependencies:
 - Plotting needs `matplotlib` in env `moe`: `pip install matplotlib`

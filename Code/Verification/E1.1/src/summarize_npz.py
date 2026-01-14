@@ -65,11 +65,15 @@ def summarize_npz(npz_path: Path) -> dict:
     data = _load_npz(npz_path)
 
     layer_names = _as_list_str(data.get("layer_names"))
+    k_experts = int(np.asarray(data["k_experts"]).item())
+
+    # Backward compatible: default to total counters.
     cnt_top1 = np.asarray(data["cnt_top1"]).astype(np.int64)
     cnt_topk = np.asarray(data["cnt_topk"]).astype(np.int64)
-    cnt_shared = np.asarray(data["cnt_shared"]).astype(np.int64)
     tokens_processed = np.asarray(data["tokens_processed"]).astype(np.int64)
-    k_experts = int(np.asarray(data["k_experts"]).item())
+    cnt_shared = None
+    if "cnt_shared" in data:
+        cnt_shared = np.asarray(data["cnt_shared"]).astype(np.int64)
 
     if cnt_top1.ndim != 2:
         raise RuntimeError(f"Expected cnt_top1 to be 2D [L,E], got shape={cnt_top1.shape}")
@@ -96,8 +100,8 @@ def summarize_npz(npz_path: Path) -> dict:
                 "tokens": n,
                 "k_experts": k_experts,
                 "num_experts": num_experts,
-                "shared_tokens": int(cnt_shared[l]),
-                "shared_frac": float(cnt_shared[l] / n),
+                "shared_tokens": int(cnt_shared[l]) if cnt_shared is not None else 0,
+                "shared_frac": float((cnt_shared[l] / n) if cnt_shared is not None else 0.0),
                 "top1_entropy": float(h1),
                 "top1_entropy_norm": float(h1 / log_e) if log_e > 0 else 0.0,
                 "top1_eff_experts": float(np.exp(h1)),
@@ -114,7 +118,27 @@ def summarize_npz(npz_path: Path) -> dict:
         )
 
     if not layer_rows:
-        raise RuntimeError(f"No valid layers found (tokens_processed all <=0?) in {npz_path}")
+        # Total summary should not normally be empty, but keep this robust.
+        return {
+            "npz": str(npz_path),
+            "num_layers": int(num_layers),
+            "num_experts": int(num_experts),
+            "k_experts": int(k_experts),
+            "total_tokens": 0,
+            "metrics_token_weighted": {
+                "shared_frac": 0.0,
+                "top1_entropy_norm": 0.0,
+                "top1_gini": 0.0,
+                "top1_cv": 0.0,
+                "top1_max_share": 0.0,
+                "topk_entropy_norm": 0.0,
+                "topk_gini": 0.0,
+                "topk_cv": 0.0,
+                "topk_max_share": 0.0,
+            },
+            "layers": [],
+            "empty": True,
+        }
 
     # Token-weighted global summaries.
     tokens = np.array([r["tokens"] for r in layer_rows], dtype=np.float64)
@@ -146,6 +170,143 @@ def summarize_npz(npz_path: Path) -> dict:
     return summary
 
 
+def summarize_npz_phase(npz_path: Path, phase: str) -> dict:
+    """Summarize a specific phase: total/prefill/decode.
+
+    If phase-specific counters are missing, falls back to total.
+    """
+    data = _load_npz(npz_path)
+    phase = (phase or "total").lower()
+    if phase not in {"total", "prefill", "decode"}:
+        raise RuntimeError(f"Unknown phase: {phase}")
+
+    if phase == "total":
+        return summarize_npz(npz_path)
+
+    suffix = f"_{phase}"
+    # Fall back to total if missing.
+    if f"cnt_top1{suffix}" not in data or f"cnt_topk{suffix}" not in data or f"tokens{suffix}" not in data:
+        out = summarize_npz(npz_path)
+        out["phase"] = phase
+        out["phase_fallback_to_total"] = True
+        return out
+
+    # Build a temporary dict with total-like keys and reuse summarize_npz.
+    tmp = dict(data)
+    tmp["cnt_top1"] = tmp[f"cnt_top1{suffix}"]
+    tmp["cnt_topk"] = tmp[f"cnt_topk{suffix}"]
+    tmp["tokens_processed"] = tmp[f"tokens{suffix}"]
+    if f"cnt_shared{suffix}" in tmp:
+        tmp["cnt_shared"] = tmp[f"cnt_shared{suffix}"]
+    elif "cnt_shared" in tmp:
+        # If shared exists only as total, do not reuse it for phase.
+        tmp.pop("cnt_shared", None)
+
+    # Write to a temp npz in-memory is not possible; reimplement minimal load.
+    layer_names = _as_list_str(tmp.get("layer_names"))
+    cnt_top1 = np.asarray(tmp["cnt_top1"]).astype(np.int64)
+    cnt_topk = np.asarray(tmp["cnt_topk"]).astype(np.int64)
+    tokens_processed = np.asarray(tmp["tokens_processed"]).astype(np.int64)
+    k_experts = int(np.asarray(tmp["k_experts"]).item())
+    cnt_shared = None
+    if "cnt_shared" in tmp:
+        cnt_shared = np.asarray(tmp["cnt_shared"]).astype(np.int64)
+
+    if cnt_top1.ndim != 2:
+        raise RuntimeError(f"Expected cnt_top1 to be 2D [L,E], got shape={cnt_top1.shape}")
+
+    num_layers, num_experts = cnt_top1.shape
+    log_e = np.log(float(num_experts))
+
+    layer_rows: list[dict] = []
+    for l in range(num_layers):
+        n = int(tokens_processed[l])
+        if n <= 0:
+            continue
+
+        p1 = _safe_prob_from_counts(cnt_top1[l], n)
+        pk = _safe_prob_from_counts(cnt_topk[l], n * k_experts)
+
+        h1 = _entropy(p1)
+        hk = _entropy(pk)
+
+        layer_rows.append(
+            {
+                "layer": l,
+                "layer_name": layer_names[l] if l < len(layer_names) else f"layer_{l}",
+                "tokens": n,
+                "k_experts": k_experts,
+                "num_experts": num_experts,
+                "shared_tokens": int(cnt_shared[l]) if cnt_shared is not None else 0,
+                "shared_frac": float((cnt_shared[l] / n) if cnt_shared is not None else 0.0),
+                "top1_entropy": float(h1),
+                "top1_entropy_norm": float(h1 / log_e) if log_e > 0 else 0.0,
+                "top1_eff_experts": float(np.exp(h1)),
+                "top1_max_share": float(p1.max()),
+                "top1_cv": float(_cv(p1)),
+                "top1_gini": float(_gini_from_nonneg(p1)),
+                "topk_entropy": float(hk),
+                "topk_entropy_norm": float(hk / log_e) if log_e > 0 else 0.0,
+                "topk_eff_experts": float(np.exp(hk)),
+                "topk_max_share": float(pk.max()),
+                "topk_cv": float(_cv(pk)),
+                "topk_gini": float(_gini_from_nonneg(pk)),
+            }
+        )
+
+    if not layer_rows:
+        # Phase may legitimately have zero tokens (e.g., decode when max_tokens=1).
+        return {
+            "npz": str(npz_path),
+            "phase": phase,
+            "num_layers": int(num_layers),
+            "num_experts": int(num_experts),
+            "k_experts": int(k_experts),
+            "total_tokens": 0,
+            "metrics_token_weighted": {
+                "shared_frac": 0.0,
+                "top1_entropy_norm": 0.0,
+                "top1_gini": 0.0,
+                "top1_cv": 0.0,
+                "top1_max_share": 0.0,
+                "topk_entropy_norm": 0.0,
+                "topk_gini": 0.0,
+                "topk_cv": 0.0,
+                "topk_max_share": 0.0,
+            },
+            "layers": [],
+            "empty": True,
+        }
+
+    tokens = np.array([r["tokens"] for r in layer_rows], dtype=np.float64)
+    w = tokens / tokens.sum()
+
+    def _wavg(key: str) -> float:
+        return float(np.sum(w * np.array([r[key] for r in layer_rows], dtype=np.float64)))
+
+    summary = {
+        "npz": str(npz_path),
+        "phase": phase,
+        "num_layers": int(num_layers),
+        "num_experts": int(num_experts),
+        "k_experts": int(k_experts),
+        "total_tokens": int(tokens.sum()),
+        "metrics_token_weighted": {
+            "shared_frac": _wavg("shared_frac"),
+            "top1_entropy_norm": _wavg("top1_entropy_norm"),
+            "top1_gini": _wavg("top1_gini"),
+            "top1_cv": _wavg("top1_cv"),
+            "top1_max_share": _wavg("top1_max_share"),
+            "topk_entropy_norm": _wavg("topk_entropy_norm"),
+            "topk_gini": _wavg("topk_gini"),
+            "topk_cv": _wavg("topk_cv"),
+            "topk_max_share": _wavg("topk_max_share"),
+        },
+        "layers": layer_rows,
+    }
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -155,6 +316,12 @@ def main() -> None:
     )
     parser.add_argument("--run_dir", default=None)
     parser.add_argument("--domain", default=None)
+    parser.add_argument(
+        "--phase",
+        default="total",
+        choices=["total", "prefill", "decode"],
+        help="Which phase to summarize. If phase counters are missing, falls back to total.",
+    )
     args = parser.parse_args()
 
     if args.npz:
@@ -169,10 +336,11 @@ def main() -> None:
     if not npz_path.exists():
         raise RuntimeError(f"Missing merged npz: {npz_path}")
 
-    summary = summarize_npz(npz_path)
+    summary = summarize_npz_phase(npz_path, args.phase)
 
-    out_json = domain_dir / "routing_summary.json"
-    out_csv = domain_dir / "routing_summary_layers.csv"
+    suffix = "" if args.phase == "total" else f"_{args.phase}"
+    out_json = domain_dir / f"routing_summary{suffix}.json"
+    out_csv = domain_dir / f"routing_summary_layers{suffix}.csv"
 
     out_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
