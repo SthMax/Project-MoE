@@ -1,0 +1,36 @@
+{
+  "run_id": null,
+  "model": {
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 8,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true
+  },
+  "generation": {
+    "max_tokens": 32,
+    "temperature": 0.0
+  },
+  "data": {
+    "seed": 1234,
+    "n_examples": 64,
+    "max_prompt_tokens": 1024,
+    "allow_fewer_examples": true
+  },
+  "domains": {
+    "gsm8k": {
+      "hf_dataset": {
+        "path": "gsm8k",
+        "name": "main",
+        "split": "test",
+        "text_field": "question"
+      },
+      "n_examples": 64,
+      "allow_fewer_examples": true
+    }
+  },
+  "output_root": "Code/Verification/E1.1/outputs/runs"
+}
