@@ -24,6 +24,14 @@
   3) 在线 primal–dual 更新；  
   4) 工程实现需要的观测量与开销。
 
+**重要的主线修正（针对你这条反馈）**：PriceMoE 的原始目标是缓解 MoE routing 的 **congestion / load skew / tail latency**，因此 shadow price 必须包含“拥塞的边际代价”。在排队网络里这天然对应 **队列长度（或其单调变换）**。所以本版本明确把
+
+- $q_e(t)$（流体队列）/ $Q_e(t)$（随机队列）作为系统状态；
+- 计算拥塞影子价格设为 $p_e^{\text{queue}}(t):=\alpha\,q_e(t)$（或更一般 $p_e^{\text{queue}}=\phi'(q_e)$）；
+- 资源稀缺影子价格仍由对偶变量给出（专家/链路容量）。
+
+最终路由的“减分项”是两类价格之和：**拥塞价（queue/backpressure） + 资源价（capacity shadow price）**。
+
 ---
 
 ## 1. 系统与决策对象（单层 MoE 推理的一次 routing 周期）
@@ -57,6 +65,8 @@ x_{c,e}\in[0,1],\qquad \sum_{e\in\mathcal E} x_{c,e}=1,\qquad \forall c.
 
 这个 $x$ 是 OR 模型里最标准的“routing matrix”。
 
+补充：在动态系统中，我们将使用 $x(t)$ 表示“时刻 $t$ 的瞬时分配”，并把其与队列状态 $Q(t)$/ $q(t)$ 形成反馈闭环。
+
 ---
 
 ## 2. 资源消耗与容量约束（给出可写 LP 的约束）
@@ -75,6 +85,8 @@ OR/MS 审稿人通常希望看到：每个决策 $x_{c,e}$ 对资源的线性消
 \]
 
 > 说明：若考虑“GPU 级 compute budget”而不是“专家级”，可在 2.3 里用矩阵把专家汇总到 GPU。
+
+补充（与拥塞相关）：容量约束刻画的是“可行服务域”，但 congestion/tail latency 的直接状态变量是队列 $Q_e(t)$。本模型稍后将通过 **Drift-plus-Penalty** 把队列状态进入目标，从而得到“队列长度就是影子价格”的 backpressure 结构。
 
 ### 2.2 通信容量（核心：通信感知 routing）
 
@@ -111,11 +123,29 @@ A x \le b,
 
 这是 v1.1 缺的“OR 主线”。我们在这里补齐：稳态 LP → 对偶 → shadow prices。
 
-### 3.1 目标：质量最大化（gating 期望效用）
+### 3.1 目标：效用–拥塞权衡（而非仅 gating 效用）
 
-令 $u_{c,e}$ 为类别 $c$ 分配到专家 $e$ 的“语义收益/质量分数”（可取 gating logits 的期望、或 bounded degradation 下的下界）。
+仅最大化 gated utility 的 LP 虽然能通过容量惩罚“间接”减少超载，但它不直接编码 queue length，因此无法在 OR 语境下正面回应 congestion/tail latency。
 
-稳态流体优化（线性规划）定义为：
+为此我们采用排队网络中经典的 **Drift-plus-Penalty**（或等价的“效用-拥塞”加权）框架：
+
+- 效用：$u_{c,e}$（gating 期望效用或可保证的质量下界）；
+- 拥塞代价：用队列长度 $q_e(t)$（流体）或 $Q_e(t)$（随机）表征；
+- 价格映射：$p_e^{\text{queue}}(t)=\phi'_e(q_e(t))$，最常用取 $\phi_e(q)=\tfrac12 w_e q^2$，则 $p_e^{\text{queue}}(t)=w_e q_e(t)$。
+
+在离散时间窗/控制周期 $t$ 内，我们考虑瞬时优化：
+\[
+\max_{x(t)}\ \sum_{c,e} \lambda_c\,u_{c,e}\,x_{c,e}(t)\; -\; \sum_e p_e^{\text{queue}}(t)\,\lambda_e(x(t))
+\quad\text{s.t.}\quad Ax(t)\le b,\; x(t)\in\Delta(\mathcal A).
+  ag{DPP}
+\]
+其中 $\lambda_e(x(t))=\sum_c \lambda_c x_{c,e}(t)$。
+
+直观上：当某专家队列很长时，$p_e^{\text{queue}}$ 上升，系统会把 token 从该专家“价格挤出”，这正是 backpressure 稳定性的负反馈来源。
+
+> 说明：若你希望保留一个“纯稳态”的静态规划，也可以将 $q$ 看作稳态在边际处的内生变量，并把 $\phi(q)$ 写入目标；但 OR 社区在在线控制问题里更常用 DPP/MaxWeight 来直接把 $Q(t)$ 进入决策。
+
+（参考基准）若忽略拥塞项（即 $p_e^{\text{queue}}\equiv 0$），则退化为之前的纯效用 LP：
 \[
 \begin{aligned}
 \max_{x} \quad & \sum_{c\in\mathcal C}\sum_{e\in\mathcal E} \lambda_c\,u_{c,e}\,x_{c,e}\\
@@ -131,7 +161,7 @@ A x \le b,
 
 ### 3.2 对偶问题与 shadow prices
 
-令 $\pi\ge 0$ 为容量约束 $Ax\le b$ 的对偶变量（向量）；它可分解为：
+令 $\pi\ge 0$ 为容量约束 $Ax\le b$ 的对偶变量（向量）；它可分解为（资源稀缺影子价格）：
 
 - 专家容量影子价格：$p_e$（对应 $\lambda_e\le\mu_e$）；
 - 链路容量影子价格：$\gamma_\ell$（对应 $\mathrm{Load}_\ell\le B_\ell$）。
@@ -143,13 +173,13 @@ KKT/互补松弛告诉我们：
 
 更重要的是**最优路由的结构**：对任意类别 $c$，只有在“调整后收益”最大的专家才会被分配质量：
 \[
- e\in \arg\max_{e\in\mathcal A_c}\Big\{u_{c,e}-\underbrace{\langle \pi, a_{c,e}\rangle}_{\text{资源机会成本}}\Big\},
+ e\in \arg\max_{e\in\mathcal A_c}\Big\{u_{c,e}-\underbrace{p_e^{\text{queue}}(t)}_{\text{拥塞影子价格}}-\underbrace{\langle \pi, a_{c,e}\rangle}_{\text{资源机会成本}}\Big\},
 \]
 其中 $a_{c,e}$ 是“选择 $e$ 的资源消耗向量”（含 compute/comm）。
 
 这正是我们要的 **pricing mechanism/index policy 形式**：
 
-> **AdjustedScore**$(c,e)=u_{c,e}-p_e-\sum_{\ell}\gamma_\ell a^{(\ell)}_{c,e}$。
+> **AdjustedScore**$(c,e)=u_{c,e}-p_e^{\text{queue}}(t)-\sum_{\ell}\gamma_\ell a^{(\ell)}_{c,e}$。
 
 这比 v1.1 的“抽象 $\mathcal U(X)$”更符合 OR 审稿人的口味：价格与约束一一对应。
 
@@ -157,7 +187,7 @@ KKT/互补松弛告诉我们：
 
 LP 的最优解可能不唯一，导致路由在等价最优解间跳变（工程上表现为抖动）。
 
-因此我们采用 OR 中非常常见的做法：加一个小的熵正则（或二次正则）得到严格凹目标：
+因此我们采用 OR 中非常常见的做法：对（DPP）或其拉格朗日松弛加入一个小的熵正则（或二次正则）得到严格凹目标：
 \[
 \max_x \ \sum_{c,e} \lambda_c u_{c,e}x_{c,e} - \frac{1}{\eta}\sum_c\lambda_c\sum_e x_{c,e}\log x_{c,e}
 \quad\text{s.t. 同 }(LP).
@@ -192,6 +222,8 @@ S_e(t)=N_e\Big(\mu_e\int_0^t \mathbf 1\{Q_e(s)>0\}\,ds\Big).
 \]
 其中 $x(t)$ 是策略诱导的瞬时分配。
 
+在采用（DPP）/MaxWeight 类策略时，$x(t)$ 由 $q(t)$ 反馈决定，因此整个系统是一个闭环控制的流体模型。
+
 ### 4.3 反射形式与存在唯一性
 
 为避免 $\mathbf 1\{q>0\}$ 的边界不光滑争议，我们采用 Skorokhod 反射映射：存在非减过程 $y_e(t)$ 使
@@ -215,21 +247,27 @@ q_e(t)=q_e(0)+\int_0^t (\lambda_e(x(s)) - \mu_e)\,ds + y_e(t),
 \]
 其中 $Ax(t)-b$ 是“资源超载量”的观测/估计。
 
-分解后得到可解释的更新：
+分解后得到可解释的更新（资源影子价格）：
 
 - 专家价格：$p_e(t+1)=[p_e(t)+\alpha(\widehat{\lambda}_e(t)-\mu_e)]_+$  
 - 链路价格：$\gamma_\ell(t+1)=[\gamma_\ell(t)+\alpha(\widehat{\mathrm{Load}}_\ell(t)-B_\ell)]_+$
 
 这些量在工程上都能从 runtime 统计直接获得：专家队列长度/吞吐、链路实际带宽、A2A 时间等。
 
+此外，拥塞影子价格来自队列状态（backpressure）：
+\[
+p_e^{\text{queue}}(t)=\phi'_e(\widehat q_e(t))\approx \phi'_e\Big(\frac{\widehat Q_e(t)}{n}\Big),
+\]
+在工程上最常见的实现就是直接用队列长度/等待时间的单调函数作为 price（例如线性 $p_e^{\text{queue}}\propto Q_e$ 或 $\propto$ moving-average latency）。
+
 ### 5.2 实时路由（只需改 score，工程非常轻量）
 
 当一个 token i（类别 c）到达且 gating 给出 logits $S_{i,e}$ 时，路由只需做：
 \[
- e^*(i)\in\arg\max_{e\in\mathcal A_c}\Big\{S_{i,e} - p_e(t) - \sum_{\ell\in\mathcal L}\gamma_\ell(t)\,a^{(\ell)}_{c,e}\Big\}.
+ e^*(i)\in\arg\max_{e\in\mathcal A_c}\Big\{S_{i,e} - p_e^{\text{queue}}(t) - \sum_{\ell\in\mathcal L}\gamma_\ell(t)\,a^{(\ell)}_{c,e}\Big\}.
 \tag{Route}
 \]
-这就是你最初想要的“在 gating score 中减去资源成本”。
+这就是你最初想要的“在 gating score 中减去资源成本”，其中**资源成本**必须包含最关键的拥塞项 $p^{\text{queue}}$，它直接缓解 congestion/load skew，并对 tail latency 给出负反馈控制。
 
 ### 5.3 通信可扩展性：JSQ($d$) / 稀疏观测
 

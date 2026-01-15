@@ -1,10 +1,10 @@
 # Constraint Survey：MoE 推理系统的约束建模（学界与业界共识）
 
-> 目的：用“老师可快速审阅”的方式，归纳大规模 MoE 推理系统在 **Prefill / Decode** 两阶段下的关键物理约束、典型数学形式、以及主流系统（vLLM / DeepSpeed-MoE / Metro 等）的建模侧重点。
+> 目的：归纳大规模 MoE 推理系统在 **Prefill / Decode** 两阶段下的关键物理约束、典型数学形式、以及主流系统（vLLM / DeepSpeed-MoE / Metro 等）的建模侧重点。
 
 ---
 
-## 1. 结论速览（给评审的 30 秒版）
+## 1. 结论速览
 
 - MoE 推理的主要约束不再是单纯的“算力 TFLOPS”，而是 **计算吞吐（Token/s）**、**显存容量（KV Cache）**、**显存带宽（Expert 权重加载）**、**通信带宽（All-to-All）**、以及 **质量约束（Top-k/可容忍降级）** 的组合。
 - **Prefill 阶段**更偏 compute-bound：调度核心是把 GPU 计算管道填满（continuous batching）。
