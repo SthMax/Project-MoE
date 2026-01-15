@@ -31,9 +31,9 @@ MoE 推理的真实瓶颈随阶段变化（Prefill vs Decode），因此我们�
 ### 1.1 计算容量约束（Compute）
 
 对每个专家 $e$，假设单位时间可完成 token 的服务速率为 $\mu_e>0$。在连续时间模型下，累计服务过程满足
-\[
+$$
 S_e(t)\le \mu_e\,T_e(t),\qquad T_e(t)=\int_0^t \mathbf 1\{Q_e(s)>0\}\,ds
-\]
+$$
 其中 $T_e(t)$ 是忙期累计时间。
 
 > 说明：这等价于传统排队系统的工作守恒 (work-conserving) 约束。随机服务时间分布可一般化到 $M/G/1$ 类，但流体极限只需要 FSLLN 条件。
@@ -42,9 +42,9 @@ S_e(t)\le \mu_e\,T_e(t),\qquad T_e(t)=\int_0^t \mathbf 1\{Q_e(s)>0\}\,ds
 
 令 $M_k$ 为 GPU $k$ 的可用 KV/显存容量（扣除权重、框架开销），单位为 block 或字节。令 $b(r)$ 为请求 $r$ 每个 token 追加的 KV 占用。
 可用抽象为：并发请求集合 $\mathcal R(t)$ 的内存占用不得超过
-\[
+$$
 \sum_{r\in\mathcal R(t)} b(r)\le M_k,\qquad \forall k.
-\]
+$$
 该约束影响可服务请求集合与预占策略；在本文中，它通过“到达可受理域”和“可用服务能力”进入容量域 $\mathcal U$（见 2.3）。
 
 ### 1.3 显存带宽/激活专家集约束（Decode 阶段，Metro 视角）
@@ -55,18 +55,18 @@ Decode 期间的关键瓶颈常来自 HBM 带宽：每激活一个专家需要�
 - $w_e$：专家 $e$ 的权重/带宽足迹。
 
 则带宽预算可抽象为
-\[
+$$
 \sum_{e\in\mathcal E} w_e\,y_{e,k}(t)\le B_k,\qquad \forall k.
-\]
+$$
 这是非凸/组合约束（因 $y$ 是指示变量）。MS 版本处理方式：将该项建模为 **切换成本/稀疏激活惩罚**（见 4.4），并在流体层面引入迟滞（hysteresis）以获得可证明的稳定与收敛。
 
 ### 1.4 通信约束（All-to-All / 跨节点）
 
 将跨 GPU/节点的 token 交换抽象为线性链路容量：对任意链路/层级 $\ell$，其单位时间可传输的数据量有限。
 在模型层面，我们不直接刻画拓扑细节，而是将通信成本写入路由的即时成本（penalty）或写入可行域 $\mathcal U$：
-\[
+$$
 \text{CommCost}(e\mid \text{token})=\gamma\,\mathbf 1\{L(e)\neq \text{local}\}\quad\text{或}\quad \gamma\,d(L(e),\text{local}).
-\]
+$$
 
 ### 1.5 质量约束（Top-$k$ / bounded degradation）
 
@@ -74,9 +74,9 @@ Decode 期间的关键瓶颈常来自 HBM 带宽：每激活一个专家需要�
 
 - Top-$k$ 可行集：$\mathcal A_i=\text{Top}_k(S_i)$。
 - 有界降级：允许扩展为
-\[
+$$
 \mathcal A_i(\varepsilon)=\big\{e: S_{i,e}\ge (1-\varepsilon)\max_{e'} S_{i,e'}\big\}.
-\]
+$$
 路由决策必须满足 $e\in\mathcal A_i$ 或 $\mathcal A_i(\varepsilon)$。
 
 ---
@@ -88,9 +88,9 @@ Decode 期间的关键瓶颈常来自 HBM 带宽：每激活一个专家需要�
 ### 2.1 到达过程
 
 对每个类别 $c\in\mathcal C$，令外部到达 $A_c(t)$ 是更新过程（可取泊松或更一般的更新过程），满足强大数定律（FSLLN）：存在 $\lambda_c(t)$（可为常数或分段连续函数），使得
-\[
+$$
 \frac{1}{n}A_c^{(n)}(nt)\Rightarrow \int_0^t \lambda_c(s)\,ds\qquad \text{u.o.c.}
-\]
+$$
 其中 $n$ 是规模参数（含义见 3.1），$\Rightarrow$ 表示一致收敛于紧集（uniform on compact sets）。
 
 > MS 写作习惯：这里直接把到达过程置于“更新过程族”并假设 FSLLN/功能强大数定律，后续引用 Dai (1995) / Chen & Yao / Robert 等 SPN 流体极限理论即可。
@@ -98,33 +98,33 @@ Decode 期间的关键瓶颈常来自 HBM 带宽：每激活一个专家需要�
 ### 2.2 路由与累计分配过程
 
 每个到达 token（类别 $c$）携带随机 gating 分数 $S$（向量）。给定系统状态 $X(t)$（含队列、激活集等），路由策略 $\pi$ 产生分配概率
-\[
+$$
 P_\pi\big(e\mid c,S,X(t)\big)\in \Delta(\mathcal A(S))
-\]
+$$
 并诱导“到达—专家”累计计数过程 $A_{c,e}(t)$，满足
-\[
+$$
 \sum_{e\in\mathcal E} A_{c,e}(t)=A_c(t),\quad A_{c,e}(t)\text{ 为非减整数值过程}.
-\]
+$$
 定义专家 $e$ 的总到达为 $A_e(t)=\sum_c A_{c,e}(t)$。
 
 ### 2.3 服务与资源可行域
 
 为统一处理 compute/memory/comm 等约束，我们定义每个时刻的**可行服务率集合**（capacity set）
-\[
+$$
 \mathcal U(X)=\Big\{u\in\mathbb R_+^E: \; 0\le u_e\le 1,\; \text{以及 }u\text{ 满足 GPU/带宽/通信等资源约束}\Big\}.
-\]
+$$
 给定 $u(t)\in\mathcal U(X(t))$，服务累计过程用“潜在服务过程 + 时间变更”表示：
-\[
+$$
 S_e(t)=N_e\Big(\int_0^t \mu_e u_e(s)\,\mathbf 1\{Q_e(s)>0\}\,ds\Big),
-\]
+$$
 其中 $N_e(\cdot)$ 可取为单位速率泊松过程或更一般的更新过程，只需满足 FSLLN。
 
 ### 2.4 队列动态
 
 对每个专家 $e$：
-\[
+$$
 Q_e(t)=Q_e(0)+A_e(t)-S_e(t),\qquad Q_e(t)\in\mathbb Z_{\ge 0}.
-\]
+$$
 令状态向量 $X(t)$ 包含 $Q(t)$ 以及必要的附加状态（如激活集、setup 状态等）。
 
 ---
@@ -137,9 +137,9 @@ Q_e(t)=Q_e(0)+A_e(t)-S_e(t),\qquad Q_e(t)\in\mathbb Z_{\ge 0}.
 
 - **流体极限（first-order）**：研究 $n\to\infty$ 下平均行为，得到确定性 ODE。
 - **QED/Halfin–Whitt（二阶）**：为刻画尾延迟与高利用率并存，设到达率与容量满足
-\[
+$$
 \lambda_n \approx n\mu - \beta\mu\sqrt n,
-\]
+$$
 或等价的服务器数 $N_n\approx \lambda_n/\mu + \beta\sqrt{\lambda_n/\mu}$。
 
 本文 MS 版本的主线是 **流体极限 + 均衡与最优化**；QED 作为“部署建议/扩容法则”给出，并可在扩展部分引入扩散极限（diffusion limit）。
@@ -147,29 +147,29 @@ Q_e(t)=Q_e(0)+A_e(t)-S_e(t),\qquad Q_e(t)\in\mathbb Z_{\ge 0}.
 ### 3.2 流体缩放定义
 
 对任意计数过程 $Z(t)$（如 $Q,A,S$），定义缩放过程
-\[
+$$
 \bar Z^{(n)}(t)=\frac{1}{n}Z^{(n)}(nt).
-\]
+$$
 在常规正则条件（FSLLN、紧性、工作守恒）下，可证明序列 $\{\bar X^{(n)}\}$ 相对紧，并存在子序列收敛到 $x(\cdot)$。
 
 ### 3.3 流体极限方程（ODE / 微分包含）
 
 令极限轨迹为 $q(t)$、$a(t)$、$s(t)$。则对几乎处处 (a.e.) 的 $t$：
-\[
+$$
 q_e(t)=q_e(0)+a_e(t)-s_e(t),\qquad \dot q_e(t)=\dot a_e(t)-\dot s_e(t).
-\]
+$$
 并且
-\[
+$$
 \dot s_e(t)=\mu_e u_e(t)\,\mathbf 1\{q_e(t)>0\},\qquad u(t)\in\mathcal U(x(t)).
-\]
+$$
 到达率由路由策略诱导：存在可测函数 $r_{c,e}(t)$ 表示类别 $c$ 到专家 $e$ 的流体分配比例，使
-\[
+$$
 \dot a_{c,e}(t)=\lambda_c(t)\,r_{c,e}(t),\qquad \sum_e r_{c,e}(t)=1,\quad r_{c,e}(t)=0\ \text{若 }e\notin\mathcal A(\cdot).
-\]
+$$
 因此
-\[
+$$
 \dot q_e(t)=\sum_{c\in\mathcal C}\lambda_c(t)\,r_{c,e}(t)-\mu_e u_e(t)\,\mathbf 1\{q_e(t)>0\}.
-\]
+$$
 
 > 重要：当引入激活集/切换（setup）状态时，右端可能变为非光滑/非凸，严格形式往往是 **微分包含**。本文通过“熵正则化 + 迟滞”使右端变为分段 Lipschitz，从而可恢复经典 ODE 存在唯一性（见 5）。
 
@@ -187,43 +187,43 @@ q_e(t)=q_e(0)+a_e(t)-s_e(t),\qquad \dot q_e(t)=\dot a_e(t)-\dot s_e(t).
 
 在稳态/常到达率 $\lambda_c$ 下，令 $\Lambda_e=\sum_c \lambda_c r_{c,e}$ 为流体给专家 $e$ 的总到达。
 若系统可稳定，则存在 $u\in\mathcal U$ 使
-\[
+$$
 \Lambda_e\le \mu_e u_e,\qquad \forall e.
-\]
+$$
 定义稳定容量域
-\[
+$$
 \mathcal C:=\Big\{\Lambda\in\mathbb R_+^E: \exists u\in\mathcal U\ \text{s.t.}\ \Lambda_e\le \mu_e u_e\ \forall e\Big\}.
-\]
+$$
 将“质量”抽象为效用 $U_{c,e}$（可由 gating 分数的期望或分位数定义），得到 NUM：
-\[
+$$
 \max_{r}\ \sum_{c}\sum_{e} \lambda_c\,U_{c,e}\,r_{c,e}\quad\text{s.t.}\quad \Lambda(r)\in \mathcal C,\ \ r_c\in\Delta(\mathcal A_c).
-\]
+$$
 
 ### 4.2 对偶与影子价格
 
 对容量约束引入对偶变量（影子价格）$p=(p_e)\ge 0$ 或更一般的 GPU 价格 $\nu_k$。
 形式上，可将约束写为 $G\Lambda\le C$（$G$ 汇总 compute/memory/comm 资源消耗），其拉格朗日函数
-\[
+$$
 \mathcal L(r,\nu)=\sum_{c,e}\lambda_c U_{c,e}r_{c,e}-\nu^\top(G\Lambda(r)-C).
-\]
+$$
 
 在该结构下，给定价格 $\nu$，最优路由（对每个类别/每个 token 的可行集）表现为
-\[
+$$
 \arg\max_{e\in\mathcal A} \big(U_{c,e}-\langle\nu, g_e\rangle\big),
-\]
+$$
 其中 $g_e$ 为选择专家 $e$ 所消耗的资源向量。
 
 ### 4.3 严格凸正则化与唯一性（Softmax / Logit 选择）
 
 为避免线性规划多解导致的 bang-bang 抖动，并获得可微对偶函数，我们对路由加入熵正则：
-\[
+$$
 \max_{r}\ \sum_{c,e}\lambda_c U_{c,e}r_{c,e}-\frac{1}{\eta}\sum_c\lambda_c\sum_e r_{c,e}\log r_{c,e}
 \quad\text{s.t. }\Lambda(r)\in\mathcal C,\ r_c\in\Delta(\mathcal A_c).
-\]
+$$
 该目标对 $r$ **严格凹**（在单纯形内部），从而最优 $r^*$ 唯一；并导出 logit/softmax 形式：
-\[
+$$
  r^*_{c,e}(\nu) = \frac{\exp\big(\eta(U_{c,e}-\langle\nu,g_e\rangle)\big)}{\sum_{e'\in\mathcal A_c}\exp\big(\eta(U_{c,e'}-\langle\nu,g_{e'}\rangle)\big)}.
-\]
+$$
 
 ### 4.4 Setup time / 激活集的非凸性与迟滞（Hysteresis）
 
@@ -234,9 +234,9 @@ q_e(t)=q_e(0)+a_e(t)-s_e(t),\qquad \dot q_e(t)=\dot a_e(t)-\dot s_e(t).
 - 路由采用迟滞规则：仅当“切换收益”超过阈值才切换。
 
 一个可操作且可分析的形式：对 token $i$（其可行集 $\mathcal A_i$），在时刻 $t$ 选择专家
-\[
+$$
  e^*(t)\in \arg\max_{e\in\mathcal A_i}\Big\{S_{i,e}-p_e(t)-H\cdot \mathbf 1\{z_{e,L(e)}(t^-)=0\}\Big\}.
-\]
+$$
 其中 $H$ 与 setup 成本同阶。迟滞使激活状态变化处于“慢时间尺度”，从而可证明系统避免 thrashing，并在流体层面形成分段光滑动力学。
 
 ---
@@ -246,9 +246,9 @@ q_e(t)=q_e(0)+a_e(t)-s_e(t),\qquad \dot q_e(t)=\dot a_e(t)-\dot s_e(t).
 ### 5.1 采用“正则化路由”确保 Lipschitz
 
 若路由使用 4.3 的 softmax 形式（并将迟滞写成分段常数惩罚），则右端函数
-\[
+$$
 F(q,t)=\lambda(t)R(q,t)-\mu\,U(q,t)\odot \mathbf 1\{q>0\}
-\]
+$$
 在任意紧集上对 $q$ 是 **分段 Lipschitz** 的：
 
 - $q\mapsto p(q)$（价格映射）若取 $p_e=\alpha q_e$ 或更一般的单调 Lipschitz 映射，即可；
@@ -258,13 +258,13 @@ F(q,t)=\lambda(t)R(q,t)-\mu\,U(q,t)\odot \mathbf 1\{q>0\}
 ### 5.2 ODE/反射微分方程的唯一解
 
 将队列非负性写为反射形式：存在非减过程 $y_e(t)$（推力项），使
-\[
+$$
 q_e(t)=q_e(0)+\int_0^t \Big(\sum_c \lambda_c(s)r_{c,e}(s)-\mu_e u_e(s)\Big)ds + y_e(t),
-\]
+$$
 并满足互补条件
-\[
+$$
 q_e(t)\ge 0,\quad y_e(0)=0,\quad \int_0^t q_e(s)\,dy_e(s)=0.
-\]
+$$
 在 $r,u$ 为可测且对 $q$ 局部 Lipschitz 的条件下，反射常微分方程在正交象限上存在唯一解（标准 Skorokhod 映射性质）。
 
 > 这一步是 MS 写作里“把存在唯一性说清楚”的关键：不直接靠直觉写 $\mathbf 1(q>0)$，而用反射项 $y(t)$ 处理边界。
@@ -276,9 +276,9 @@ q_e(t)\ge 0,\quad y_e(0)=0,\quad \int_0^t q_e(s)\,dy_e(s)=0.
 ### 6.1 流体均衡的定义
 
 在常到达率 $\lambda$ 下，称 $q^*$ 为流体均衡，若存在常数控制 $r^*,u^*$ 使对所有 $e$：
-\[
+$$
 0=\dot q_e(t)=\sum_c \lambda_c r^*_{c,e}-\mu_e u^*_e\cdot \mathbf 1\{q^*_e>0\},
-\]
+$$
 且 $u^*\in\mathcal U(x^*)$、$r^*$ 满足质量可行集约束。
 
 ### 6.2 均衡存在性
@@ -304,17 +304,17 @@ q_e(t)\ge 0,\quad y_e(0)=0,\quad \int_0^t q_e(s)\,dy_e(s)=0.
 
 令 Lyapunov 函数 $V(q)=\tfrac12\sum_e q_e^2$。
 对 MaxWeight/Backpressure 类策略（价格与队列单调相关，如 $p_e=\alpha q_e$），在容量域内部可证明存在 $\epsilon,B>0$ 使
-\[
+$$
 \mathbb E[V(Q(t+1))-V(Q(t))\mid Q(t)]\le -\epsilon\sum_e Q_e(t)+B.
-\]
+$$
 从而得到正再生与稳态尾界。
 
 ### 7.2 原对偶更新的连续时间近似
 
 将对偶变量视为影子价格，采用投影梯度/镜像下降：
-\[
+$$
 \dot\nu(t)=\big[\nabla d(\nu(t))\big]_+\quad\text{或}\quad \dot\nu(t)=\big[G\Lambda(r^*(\nu(t)))-C\big]_+.
-\]
+$$
 在 4.3 的正则化下，$r^*(\nu)$ 光滑，使得该动力系统在标准条件下收敛到唯一 $\nu^*$。
 
 ### 7.3 稀疏信息与 JSQ($d$) 近似（通信可扩展性）

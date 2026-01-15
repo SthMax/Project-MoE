@@ -14,6 +14,17 @@ github: [GitHub Link](https://github.com/MoE-Inf/awesome-moe-inference)
 
 
 
+# MoE Works
+
+## Google's MoE Blog:
+[Mixture-of-Experts with Expert Choice Routing](https://research.google/blog/mixture-of-experts-with-expert-choice-routing/)
+
+## FusedMoE (vLLM MoE Backend)
+
+arxiv: [FuseMoE: Mixture-of-Experts Transformers for Fleximodal Fusion](https://arxiv.org/abs/2402.03226v2)
+local: [[Han et al. - 2024 - FuseMoE Mixture-of-Experts Transformers for Fleximodal Fusion.pdf]]
+
+
 # MoE Routing Works
 
 ## MoETuner: Optimized Mixture of Expert Serving with Balanced Expert Placement and Token Routing
@@ -42,3 +53,7 @@ local: [[Lasby et al. - 2025 - REAP the Experts Why Pruning Prevails for One-Sho
 ## [Processing Networks: Fluid Models and Stability](https://www.cambridge.org/core/product/identifier/9781108772662/type/book)
  by J. G. Dai and J. Michael Harrison
 local: [[Dai and Harrison - 2020 - Processing Networks Fluid Models and Stability.pdf]]
+
+
+# Other LLM Papers
+
