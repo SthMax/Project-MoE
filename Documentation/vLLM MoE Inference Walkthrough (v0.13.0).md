@@ -54,7 +54,9 @@ Below is the “one request becomes many batched steps” story.
 
 ### 1.1 High-level sequence diagram
 
+
 ```mermaid
+%%{init: { 'theme': 'dark' }}%%
 sequenceDiagram
     autonumber
     participant User as Client/User
@@ -64,27 +66,32 @@ sequenceDiagram
     participant Sch as Scheduler
     participant Ex as Executor
     participant W as GPU Worker
-    participant MR as ModelRunner
-    participant Model as Transformer(+MoE)
+    participant MR as GPUModelRunner
+    participant Model as Transformer + MoE
 
     User->>FE: submit prompt / request
     FE->>FE: InputProcessor.process_inputs(...)
     FE->>IPC: EngineCoreClient.add_request(EngineCoreRequest)
     IPC->>Core: (ZMQ) enqueue request
+
     loop each iteration
         Core->>Sch: schedule() -> SchedulerOutput
         Core->>Ex: execute_model(SchedulerOutput)
         Ex->>W: RPC execute_model
-        W->>MR: GPUModelRunner.execute_model
-        MR->>Model: forward(...)  (prefill+decode tokens may mix)
+        W->>MR: GPUModelRunner.execute_model()
+        MR->>Model: forward(...)
+        Note right of MR: Prefill + decode tokens may mix
         Model-->>MR: logits / hidden_states
-        MR-->>W: (maybe None; sampling may be separate)
+        MR-->>W: ModelRunnerOutput or None
+        Note right of W: If None, sampling may be separate
+
         alt execute_model returned None
             Core->>Ex: sample_tokens(grammar_output)
             Ex->>W: RPC sample_tokens
-            W->>MR: GPUModelRunner.sample_tokens
-            MR-->>W: ModelRunnerOutput(sampled_token_ids,...)
+            W->>MR: GPUModelRunner.sample_tokens()
+            MR-->>W: ModelRunnerOutput(sampled_token_ids, ...)
         end
+
         Core->>Sch: update_from_output(...)
         Core-->>IPC: EngineCoreOutputs (tokens / stats)
         IPC-->>FE: get_output()
@@ -92,7 +99,6 @@ sequenceDiagram
         FE-->>User: streamed tokens / final outputs
     end
 ```
-
 ### 1.2 The concrete “inner loop” in code
 
 The most important “ground truth” is `EngineCore.step()` in:
