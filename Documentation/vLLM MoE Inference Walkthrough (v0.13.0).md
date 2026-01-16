@@ -191,15 +191,15 @@ A simplified picture of the dataflow is:
 
 ```mermaid
 flowchart TD
-    HS[hidden_states: (T,H)] --> Router[router logits: (T,E)]
-    Router --> TopK[FusedMoE.select_experts]
-    TopK --> IDs[topk_ids: (T,K)]
-    TopK --> W[topk_weights: (T,K)]
-    IDs --> Dispatch[permute/dispatch tokens by expert]
+    HS["hidden_states (T×H)"] --> Router["router logits (T×E)"]
+    Router --> TopK["FusedMoE.select_experts()"]
+    TopK --> IDs["topk_ids (T×K)"]
+    TopK --> W["topk_weights (T×K)"]
+    IDs --> Dispatch["permute / dispatch tokens by expert"]
     W --> Dispatch
-    Dispatch --> ExpertGEMM[expert MLP (fused kernels)]
-    ExpertGEMM --> Combine[unpermute + weighted sum]
-    Combine --> Out[final_hidden_states: (T,H)]
+    Dispatch --> ExpertGEMM["expert MLP (fused kernels)"]
+    ExpertGEMM --> Combine["unpermute + weighted sum"]
+    Combine --> Out["final_hidden_states (T×H)"]
 ```
 
 Notes:
