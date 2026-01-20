@@ -1,3 +1,4 @@
 external/*
 *debug_runs*
 __pycache__*
+.DS_Store
