@@ -51,72 +51,274 @@ $$\tilde{S}_{je}(t) = s_{je} - \alpha q_e(t) - \gamma_{L(e),k_j} - \delta \cdot 
 
 ## 2. 约束选择：从数学到 vLLM 代码的映射
 
+> **⚠️ 更新说明 (2026-01-21)**：本节已根据 vLLM v0.13.0 实际代码进行全面核对和更正，修复了之前版本中的幻觉内容（行号错误、函数名错误、代码逻辑简化等）。
+
 ### 2.1 约束对照表
 
-| 你的模型约束 | vLLM 代码对应 | 实现难度 | 数据来源 |
-|------------|-------------|---------|---------|
-| **计算约束** $\sum a_e u_e \leq C_k$ | `max_num_scheduled_tokens` | ⭐ 低 | `SchedulerConfig` |
-| **显存约束** $\sum X_e \cdot \text{size}(e) \leq M_k$ | KV cache 块分配 | ⭐⭐ 中 | `KVCacheManager` |
-| **通信约束** $F_{kk'} \leq B_{kk'}$ | EP All-to-All | ⭐⭐⭐ 高 | 需新增监控 |
-| **质量约束** $\text{Score} \geq (1-\epsilon)\max$ | Top-k routing 修改 | ⭐⭐ 中 | `FusedMoE.select_experts()` |
-| **队列长度** $q_e(t)$ | ❌ 未原生支持 | ⭐⭐⭐ 高 | 需新增采集 |
+| 你的模型约束 | vLLM 代码对应 | 实现难度 | 数据来源 | 更正说明 |
+|------------|-------------|---------|---------|---------|
+| **计算约束** $\sum a_e u_e \leq C_k$ | `max_num_scheduled_tokens` | ⭐ 低 | `SchedulerConfig` | ✅ 一致 |
+| **显存约束** $\sum X_e \cdot \text{size}(e) \leq M_k$ | KV cache 块分配 | ⭐⭐ 中 | `KVCacheManager` | ⚠️ 抢占逻辑比之前描述复杂 |
+| **通信约束** $F_{kk'} \leq B_{kk'}$ | EP All-to-All | ⭐⭐⭐ 高 | 需新增监控 | ✅ 一致 |
+| **质量约束** $\text{Score} \geq (1-\epsilon)\max$ | Top-k routing 修改 | ⭐⭐ 中 | `FusedMoE._select_experts()` | ⚠️ 函数名和路径已更正 |
+| **队列长度** $q_e(t)$ | ❌ 未原生支持 | ⭐⭐⭐ 高 | 需新增采集 | ✅ 一致，但已有 `moe_stats.py` 部分支持 |
 
 ### 2.2 约束详细映射
+
+---
 
 #### 约束 1：计算容量（Token Budget）
 
 **数学形式**：
-$$\sum_{e \in \mathcal{E}_k} a_e \cdot u_e(t) \leq C_k$$
+$$\sum_{r \in \mathcal{R}} n_r(t) \leq C$$
 
-**vLLM 代码体现**：
+其中 $n_r(t)$ 表示请求 $r$ 在时刻 $t$ 调度的 token 数，$C$ 是每步最大调度 token 数。
+
+> **与原模型区别**：原模型按专家 $e$ 累加（$\sum_e a_e u_e$），但 vLLM 是按请求累加。两者等价性需要证明（见下方"数学抽象"部分）。
+
+**vLLM 代码体现**（来自 `vllm/v1/core/sched/scheduler.py`）：
 
 ```python
-# vllm/v1/core/sched/scheduler.py L269-L275
+# scheduler.py L256-L270 (schedule 函数核心逻辑)
 def schedule(self) -> SchedulerOutput:
+    """
+    调度算法核心：没有显式的 "prefill phase" 或 "decoding phase"，
+    每个请求有 num_computed_tokens 和 num_tokens_with_spec，
+    调度器尝试让 num_computed_tokens 追上 num_tokens_with_spec。
+    """
+    scheduled_new_reqs: list[Request] = []
+    scheduled_resumed_reqs: list[Request] = []
+    scheduled_running_reqs: list[Request] = []
+    preempted_reqs: list[Request] = []
+
+    req_to_new_blocks: dict[str, KVCacheBlocks] = {}
+    num_scheduled_tokens: dict[str, int] = {}
+    
+    # ========== 关键约束：Token Budget ==========
+    token_budget = self.max_num_scheduled_tokens  # ← 这就是 C，来自 scheduler_config
     # ...
-    token_budget = self.max_num_scheduled_tokens  # ← 这就是 C_k
-    # ...
+
+# scheduler.py L278-L310 (RUNNING 队列调度)
+    req_index = 0
     while req_index < len(self.running) and token_budget > 0:
-        # ...
+        request = self.running[req_index]
+        
+        # 计算该请求需要处理的新 token 数
+        num_new_tokens = (
+            request.num_tokens_with_spec
+            + request.num_output_placeholders
+            - request.num_computed_tokens
+        )
+        
+        # 长 prefill 截断（可配置阈值）
+        if 0 < self.scheduler_config.long_prefill_token_threshold < num_new_tokens:
+            num_new_tokens = self.scheduler_config.long_prefill_token_threshold
+        
+        # ========== Token Budget 约束 ==========
         num_new_tokens = min(num_new_tokens, token_budget)  # 受 budget 约束
-        token_budget -= num_new_tokens  # 消耗 budget
+        
+        # 确保不超过 max_model_len
+        num_new_tokens = min(
+            num_new_tokens, self.max_model_len - 1 - request.num_computed_tokens
+        )
+        # ...
+        
+        # 成功调度后消耗 budget
+        token_budget -= num_new_tokens
+        req_index += 1
+```
+
+**关键配置来源**：
+```python
+# scheduler.py L93-95 (__init__ 中)
+self.max_num_running_reqs = self.scheduler_config.max_num_seqs  # 最大并发请求数
+self.max_num_scheduled_tokens = self.scheduler_config.max_num_batched_tokens  # Token Budget C
+self.max_model_len = vllm_config.model_config.max_model_len  # 单请求最大长度
 ```
 
 **映射关系**：
-- $C_k$ ↔ `max_num_scheduled_tokens`（硬上限）
-- $a_e$ ↔ 每个 token 的计算开销（简化为 1）
-- $u_e(t)$ ↔ `num_scheduled_tokens[req_id]`
+| 数学符号 | vLLM 变量 | 说明 |
+|---------|----------|------|
+| $C$ | `max_num_scheduled_tokens` | 每步最大调度 token 数（硬上限） |
+| $n_r(t)$ | `num_scheduled_tokens[req_id]` | 请求 $r$ 在该步调度的 token 数 |
+| 约束检查 | `min(num_new_tokens, token_budget)` | 截断到剩余 budget |
 
-**实现难度**：⭐ 低（已有现成接口）
+**数学抽象（更新）**：
+
+原模型约束：$\sum_{e \in \mathcal{E}_k} a_e \cdot u_e(t) \leq C_k$
+
+vLLM 实际约束：$\sum_{r \in \mathcal{R}_{\text{scheduled}}} n_r(t) \leq C$
+
+**等价性证明**：设每个 token 平均激活 $k$ 个专家（Top-k），则：
+$$\sum_e u_e(t) = k \cdot \sum_r n_r(t)$$
+
+若 $a_e = 1$（均匀计算开销），则：
+$$\sum_e a_e u_e(t) = k \cdot \sum_r n_r(t) \leq k \cdot C$$
+
+因此 vLLM 的 token budget 约束隐式实现了专家层面的计算约束，只需将 $C_k = k \cdot C$。
+
+**实现难度**：⭐ 低（已有现成接口，参数可配置）
 
 ---
 
 #### 约束 2：显存容量（KV Cache）
 
 **数学形式**：
-$$\sum_{e \in \mathcal{E}_k} X_e(t) \cdot \text{size}(e) \leq M_k$$
+$$\sum_{r \in \mathcal{R}_{\text{active}}} \text{blocks}(r) \leq B_{\text{total}}$$
 
-**vLLM 代码体现**：
+其中 $\text{blocks}(r)$ 是请求 $r$ 占用的 KV cache block 数，$B_{\text{total}}$ 是 GPU 总 block 数。
+
+**vLLM 代码体现**（来自 `vllm/v1/core/sched/scheduler.py` + `kv_cache_manager.py`）：
 
 ```python
-# vllm/v1/core/sched/scheduler.py L359-L369
-new_blocks = self.kv_cache_manager.allocate_slots(
-    request,
-    num_new_tokens,
-    num_lookahead_tokens=self.num_lookahead_tokens,
-)
-if new_blocks is None:
-    # 内存不足，触发抢占
-    preempted_req = max(self.running, key=lambda r: (r.priority, r.arrival_time))
-    self._preempt_request(preempted_req, scheduled_timestamp)
+# scheduler.py L350-L403 (KV cache 分配与抢占的完整逻辑)
+    # 为请求分配 KV cache blocks
+    with record_function_or_nullcontext("schedule: allocate_slots"):
+        while True:
+            # ========== 尝试分配 ==========
+            new_blocks = self.kv_cache_manager.allocate_slots(
+                request,
+                num_new_tokens,
+                num_lookahead_tokens=self.num_lookahead_tokens,
+            )
+
+            if new_blocks is not None:
+                # 分配成功，跳出循环
+                break
+
+            # ========== 分配失败，触发抢占 ==========
+            # 抢占策略取决于调度策略
+            if self.policy == SchedulingPolicy.PRIORITY:
+                # 优先级调度：抢占优先级最低（priority 和 arrival_time 最大）的请求
+                preempted_req = max(
+                    self.running,
+                    key=lambda r: (r.priority, r.arrival_time),
+                )
+                self.running.remove(preempted_req)
+                
+                # 如果被抢占请求已经被调度过，需要回滚其资源
+                if preempted_req in scheduled_running_reqs:
+                    scheduled_running_reqs.remove(preempted_req)
+                    token_budget += num_scheduled_tokens[preempted_req.request_id]  # 返还 token budget
+                    req_to_new_blocks.pop(preempted_req.request_id)
+                    num_scheduled_tokens.pop(preempted_req.request_id)
+                    # ... 回滚 encoder inputs 等
+                    req_index -= 1
+            else:
+                # FCFS 调度：抢占队列末尾请求
+                preempted_req = self.running.pop()
+
+            # 执行抢占
+            self._preempt_request(preempted_req, scheduled_timestamp)
+            preempted_reqs.append(preempted_req)
+            
+            if preempted_req == request:
+                # 自己被抢占了，无法调度
+                break
+
+    if new_blocks is None:
+        # 无法调度该请求
+        break
+
+# scheduler.py L798-L815 (_preempt_request 函数)
+def _preempt_request(self, request: Request, timestamp: float) -> None:
+    """
+    抢占请求：释放其资源并放回等待队列。
+    注意：调用前需先从 running 队列中移除请求。
+    """
+    assert request.status == RequestStatus.RUNNING
+    
+    # ========== 释放资源 ==========
+    self.kv_cache_manager.free(request)  # 释放 KV cache blocks
+    self.encoder_cache_manager.free(request)  # 释放 encoder cache
+    
+    # ========== 更新请求状态 ==========
+    request.status = RequestStatus.PREEMPTED
+    request.num_computed_tokens = 0  # 重置进度（需重新计算）
+    request.spec_token_ids.clear()
+    request.num_preemptions += 1
+    
+    # ========== 放回等待队列头部 ==========
+    self.waiting.prepend_request(request)
+```
+
+**KVCacheManager.allocate_slots 内部逻辑**（来自 `vllm/v1/core/kv_cache_manager.py`）：
+
+```python
+# kv_cache_manager.py L203-L290 (allocate_slots 函数)
+def allocate_slots(
+    self,
+    request: Request,
+    num_new_tokens: int,
+    num_new_computed_tokens: int = 0,
+    new_computed_blocks: KVCacheBlocks | None = None,
+    num_lookahead_tokens: int = 0,
+    num_external_computed_tokens: int = 0,
+    delay_cache_blocks: bool = False,
+    num_encoder_tokens: int = 0,
+) -> KVCacheBlocks | None:
+    """
+    为请求分配 KV cache slots。
+    
+    Blocks 布局:
+    | < comp > | < new_comp > | < ext_comp >  | < new >  | < lookahead > |
+              |            < to be allocated >           |
+    
+    返回:
+        新分配的 blocks，如果空间不足则返回 None。
+    """
+    # ... 计算需要的总 token 数
+    num_tokens_need_slot = min(
+        total_computed_tokens + num_new_tokens + num_lookahead_tokens,
+        self.max_model_len,
+    )
+    
+    # 释放滑动窗口外的 blocks（优化空间利用）
+    self.coordinator.remove_skipped_blocks(
+        request.request_id, total_computed_tokens
+    )
+    
+    # ========== 检查是否有足够的空闲 blocks ==========
+    num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
+        request_id=request.request_id,
+        num_tokens=num_tokens_need_slot,
+        new_computed_blocks=new_computed_block_list,
+        num_encoder_tokens=num_encoder_tokens,
+        total_computed_tokens=num_local_computed_tokens + num_external_computed_tokens,
+    )
+
+    if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+        # ========== 空间不足，返回 None 触发调度器抢占 ==========
+        return None
+    
+    # ... 分配 blocks 并返回
+    new_blocks = self.coordinator.allocate_new_blocks(
+        request.request_id, num_tokens_need_slot, num_encoder_tokens
+    )
+    return self.create_kv_cache_blocks(new_blocks)
 ```
 
 **映射关系**：
-- $M_k$ ↔ `num_gpu_blocks * block_size`（总 KV cache 容量）
-- $X_e(t) \cdot \text{size}(e)$ ↔ 每个请求分配的 blocks 数
-- 抢占机制 ↔ 当 $\sum X_e \cdot \text{size}(e) > M_k$ 时触发
+| 数学符号 | vLLM 变量/函数 | 说明 |
+|---------|---------------|------|
+| $B_{\text{total}}$ | `block_pool.get_num_free_blocks()` | 当前空闲 block 数 |
+| $\text{blocks}(r)$ | `coordinator.get_num_blocks_to_allocate(...)` | 请求需要的新 block 数 |
+| 约束检查 | `num_blocks_to_allocate > free_blocks` → `return None` | 触发抢占 |
 
-**实现难度**：⭐⭐ 中（有现成框架，但需理解块管理逻辑）
+**数学抽象（更新）**：
+
+原模型约束：$\sum_{e \in \mathcal{E}_k} X_e(t) \cdot \text{size}(e) \leq M_k$
+
+vLLM 实际约束：
+1. **分配时检查**：$\text{blocks\_needed}(r) \leq \text{free\_blocks}$
+2. **全局约束**：$\sum_{r \in \mathcal{R}_{\text{active}}} \text{blocks}(r) \leq B_{\text{total}}$
+
+**关键区别**：
+- 原模型是**专家层面**的显存约束（每个专家权重 + 激活状态）
+- vLLM 是**请求层面**的 KV cache 约束（每个请求的 K/V tensors）
+- MoE 专家权重是**静态分配**的（在模型加载时确定），不参与动态调度
+
+**实现难度**：⭐⭐ 中（框架完善，但抢占逻辑复杂，需理解 block 管理）
 
 ---
 
@@ -125,27 +327,84 @@ if new_blocks is None:
 **数学形式**：
 $$F_{kk'}(t) \leq B_{kk'}$$
 
-**vLLM 代码体现**：
+其中 $F_{kk'}(t)$ 是 GPU $k$ 到 GPU $k'$ 的通信流量，$B_{kk'}$ 是带宽上限。
+
+**vLLM 代码体现**（来自 `vllm/model_executor/layers/fused_moe/layer.py`）：
 
 ```python
-# vllm/model_executor/layers/fused_moe/layer.py
-# 在 FusedMoE.forward_native() 中隐含的 All-to-All
-fused_output = torch.ops.vllm.moe_forward(
-    hidden_states,
-    router_logits,
-    self.layer_name,
-    # ← All-to-All 在这个 kernel 内部发生
-)
+# layer.py L1743-L1755 (forward_native 函数)
+def forward_native(
+    self,
+    hidden_states: torch.Tensor,
+    router_logits: torch.Tensor,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    # ... padding 处理
+    
+    if self.shared_experts is None:
+        if current_platform.is_tpu() or current_platform.is_cpu():
+            fused_output = self.forward_impl(hidden_states, router_logits)
+        else:
+            # ========== MoE forward（包含隐式 All-to-All）==========
+            fused_output = torch.ops.vllm.moe_forward(
+                hidden_states, router_logits, self.layer_name
+            )
+        return reduce_output(fused_output)
+    # ...
+
+# layer.py L1954-L2005 (forward_impl 中的 EP dispatch/combine)
+def forward_impl(self, hidden_states, router_logits):
+    # ...
+    do_naive_dispatch_combine = self.dp_size > 1 and not isinstance(
+        self.quant_method, FusedMoEModularMethod
+    )
+    
+    if do_naive_dispatch_combine:
+        # ========== EP All-to-All dispatch ==========
+        dispatch_res = get_ep_group().dispatch(
+            hidden_states_to_dispatch,
+            router_logits,
+            self.is_sequence_parallel,
+            extra_tensors=extra_tensors,
+        )
+        hidden_states_combined, router_logits = dispatch_res
+    
+    # ... 专家计算
+    final_hidden_states = self.quant_method.apply(...)
+    
+    def combine_output(states):
+        if do_naive_dispatch_combine:
+            # ========== EP All-to-All combine ==========
+            states = get_ep_group().combine(states, self.is_sequence_parallel)
+        return states
 ```
 
 **问题**：vLLM **没有原生的通信流量监控**！
 
-**需要新增**：
-1. 在 `moe_forward` 前后统计发送/接收的 token 数
-2. 按 (source_gpu, target_gpu) 聚合流量
-3. 用 $\gamma_{L(e),k_j}$ 惩罚跨 GPU 路由
+All-to-All 发生在：
+1. `get_ep_group().dispatch()` - 将 hidden_states 分发到持有目标专家的 GPU
+2. `get_ep_group().combine()` - 收集计算结果
 
-**实现难度**：⭐⭐⭐ 高（需要修改 kernel 或添加 wrapper）
+**需要新增的监控**：
+```python
+# 在 dispatch/combine 前后统计
+sent_tokens_per_gpu = torch.zeros(ep_size)
+recv_tokens_per_gpu = torch.zeros(ep_size)
+
+# 根据 topk_ids 统计每个 token 要发送到哪个 GPU
+for token_idx, expert_ids in enumerate(topk_ids):
+    for expert_id in expert_ids:
+        target_gpu = expert_id % ep_size  # 简化映射
+        sent_tokens_per_gpu[target_gpu] += 1
+```
+
+**映射关系**：
+| 数学符号 | vLLM 变量/函数 | 说明 |
+|---------|---------------|------|
+| $F_{kk'}(t)$ | ❌ 未实现 | 需要在 dispatch/combine 中统计 |
+| $B_{kk'}$ | ❌ 未暴露 | NCCL 带宽是硬件限制 |
+| EP 分组 | `get_ep_group()` | Expert Parallel 通信组 |
+
+**实现难度**：⭐⭐⭐ 高（需要修改 EP 通信层或添加 wrapper）
 
 ---
 
@@ -154,65 +413,207 @@ fused_output = torch.ops.vllm.moe_forward(
 **数学形式**：
 $$\text{Score}(j,e) \geq (1-\epsilon) \cdot \max_{e'} \text{Score}(j,e')$$
 
-**vLLM 代码体现**：
+**vLLM 代码体现**（来自 `vllm/model_executor/layers/fused_moe/layer.py` + `fused_moe.py`）：
+
+> **⚠️ 更正**：之前文档引用了不存在的 `router/base_router.py L203-L245`。实际的 routing 逻辑在 `FusedMoE._select_experts()` 方法中。
 
 ```python
-# vllm/model_executor/layers/fused_moe/router/base_router.py L203-L245
-def select_experts(self, hidden_states, router_logits):
-    # Step 3: Compute routing
-    topk_weights, topk_ids = self._compute_routing(
-        hidden_states, router_logits, indices_type
+# layer.py L1553-1660 (_select_experts 函数)
+def _select_experts(
+    self,
+    hidden_states: torch.Tensor,
+    router_logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    根据 router logits 选择 Top-k 专家。
+    
+    返回:
+        (topk_weights, topk_ids): 权重和专家 ID
+    """
+    from vllm.model_executor.layers.fused_moe.fused_moe import (
+        fused_topk,
+        fused_topk_bias,
     )
-    # Step 4: Apply EPLB mapping (如果启用)
-    topk_ids = self._apply_eplb_mapping(topk_ids)
-    return topk_weights, topk_ids
+    
+    indices_type = self.quant_method.topk_indices_dtype
+    
+    # ========== 路由策略选择 ==========
+    
+    # 1. 路由模拟（用于测试）
+    routing_strategy = envs.VLLM_MOE_ROUTING_SIMULATION_STRATEGY
+    if routing_strategy != "":
+        topk_weights, topk_ids = RoutingSimulator.simulate_routing(...)
+    
+    # 2. DeepSeek V2/V3 使用 grouped_topk
+    elif self.use_grouped_topk and valid_grouping():
+        topk_weights, topk_ids = self._grouped_topk_impl(
+            hidden_states=hidden_states,
+            gating_output=router_logits,
+            e_score_correction_bias=self.e_score_correction_bias,
+        )
+    
+    # 3. 带 bias 校正的 topk
+    elif self.e_score_correction_bias is not None:
+        topk_weights, topk_ids = fused_topk_bias(...)
+    
+    # 4. 标准 fused_topk（最常用）
+    elif self.custom_routing_function is None:
+        topk_weights, topk_ids, token_expert_indices = fused_topk(
+            hidden_states=hidden_states,
+            gating_output=router_logits,
+            topk=self.top_k,
+            renormalize=self.renormalize,
+            indices_type=indices_type,
+        )
+    
+    # 5. 自定义路由函数
+    else:
+        topk_weights, topk_ids = self.custom_routing_function(...)
+    
+    # ========== EPLB 映射（专家负载均衡）==========
+    if self.enable_eplb:
+        topk_ids = eplb_map_to_physical_and_record(
+            topk_ids=topk_ids,
+            expert_load_view=self.expert_load_view,
+            logical_to_physical_map=self.logical_to_physical_map,
+            logical_replica_count=self.logical_replica_count,
+        )
+    
+    # ========== 统计记录（用于 E1.1 实验）==========
+    try:
+        from vllm.moe_stats import record_topk
+        record_topk(
+            layer_name=self.layer_name,
+            topk_ids=topk_ids,
+            num_experts=int(router_logits.shape[-1]),
+            k_experts=int(self.top_k),
+        )
+    except Exception:
+        pass
+    
+    return topk_weights, topk_ids, zero_expert_result
+
+# fused_moe.py L1347-1371 (fused_topk 函数)
+def fused_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    indices_type: torch.dtype | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    融合的 Top-k 选择 + softmax 归一化。
+    """
+    M, _ = hidden_states.size()
+    
+    topk_weights = torch.empty(M, topk, dtype=torch.float32, device=hidden_states.device)
+    topk_ids = torch.empty(M, topk, dtype=torch.int32, device=hidden_states.device)
+    token_expert_indices = torch.empty(M, topk, dtype=torch.int32, device=hidden_states.device)
+    
+    # ========== 调用 CUDA kernel 进行 topk + softmax ==========
+    topk_func = dispatch_topk_func(use_rocm_aiter=rocm_aiter_ops.is_fused_moe_enabled())
+    topk_weights, topk_ids = topk_func(
+        topk_weights, topk_ids, token_expert_indices, gating_output, renormalize
+    )
+    
+    return topk_weights, topk_ids, token_expert_indices
 ```
 
 **映射关系**：
-- 原始 gating score $s_{je}$ ↔ `router_logits`
-- Top-k 选择 ↔ `torch.topk(router_logits, k=self.top_k)`
-- 质量约束 ↔ 在选择后验证是否满足 $(1-\epsilon)$ 条件
+| 数学符号 | vLLM 变量 | 说明 |
+|---------|----------|------|
+| $\text{Score}(j,e)$ | `router_logits[j, e]` 经 softmax/sigmoid | 原始 gating score |
+| $\arg\max_e$ | `torch.topk(..., k=self.top_k)` | Top-k 选择 |
+| 质量约束 $(1-\epsilon)$ | ❌ 未原生实现 | 需在 `_select_experts` 后添加过滤 |
 
-**实现难度**：⭐⭐ 中（可在 `select_experts` 后添加过滤）
+**实现难度**：⭐⭐ 中（可在 `_select_experts` 返回前添加过滤逻辑）
 
 ---
 
-#### 新增约束：专家队列长度
+#### 约束 5：专家队列长度（Virtual Queue）
 
 **数学形式**：
-$$q_e(t) = \text{专家 } e \text{ 的当前待处理 token 数}$$
+$$q_e(t) = \text{专家 } e \text{ 的当前"负载"（该 batch 被路由到 } e \text{ 的 token 数）}$$
 
-**vLLM 现状**：❌ **完全没有这个概念！**
+**vLLM 现状**：❌ **没有显式的 per-expert 队列，但已有部分统计支持！**
 
-vLLM 的调度是 **per-request** 的，不是 **per-expert** 的。每个 token 在一个 forward 中选择 Top-k 专家，计算立即完成——没有"排队等待某个专家"的概念。
+> **⚠️ 更正**：之前说"完全没有这个概念"不准确。vLLM 有 `moe_stats.py` 模块用于统计 expert routing，且 E1.1 实验已经基于此实现。
 
-**需要新增**：
-
-方案 A（统计层面）：
 ```python
-# 在 FusedMoE.select_experts() 后累加
-expert_load_count[topk_ids] += 1  # 统计每个专家的负载
+# layer.py L1672-1684 (已有的统计记录)
+# 在 _select_experts 末尾
+try:
+    from vllm.moe_stats import record_topk
+    record_topk(
+        layer_name=self.layer_name,
+        topk_ids=topk_ids,
+        num_experts=int(router_logits.shape[-1]),
+        k_experts=int(self.top_k),
+    )
+except Exception:
+    pass
+
+# moe_stats.py (你们 E1.1 扩展的模块)
+def record_topk(layer_name, topk_ids, num_experts, k_experts):
+    """
+    记录每个专家被路由到的 token 数。
+    可用于计算 virtual queue q_e(t)。
+    """
+    # topk_ids: (T, K) 其中 T 是 token 数，K 是 top_k
+    # 统计每个专家被选中的次数
+    counts = torch.bincount(topk_ids.flatten(), minlength=num_experts)
+    # ... 保存到全局统计
 ```
 
-方案 B（逻辑层面）：
+**vLLM 的调度是 per-request 的关键含义**：
+1. Scheduler 调度的是 **请求（request）**，不是专家
+2. 每个 token 在一个 forward 中选择 Top-k 专家，**计算立即完成**
+3. 没有"token 排队等待某个专家计算"的概念
+4. "队列长度"需要定义为 **batch 内被路由到该专家的 token 数**（瞬时负载）
+
+**Virtual Queue 的定义**：
+$$q_e(t) = \sum_{j \in \mathcal{B}(t)} \mathbb{I}\{e \in \text{Top-k}(j)\}$$
+
+其中 $\mathcal{B}(t)$ 是当前 batch 中的所有 token。
+
+**实现方案**：
 ```python
-# 定义 "virtual queue"：每个专家在当前 batch 中被选中的次数
-q_e = count(token j in batch | e in topk_ids[j])
+# 在 _select_experts 开始时读取上一步的统计
+expert_load = self.get_expert_load_ema()  # 指数移动平均
+
+# 修正 router_logits
+adjusted_logits = router_logits - alpha * expert_load.unsqueeze(0)
+
+# 执行 Top-k 选择
+topk_weights, topk_ids = fused_topk(hidden_states, adjusted_logits, ...)
+
+# 更新统计
+self.update_expert_load_ema(topk_ids)
 ```
 
-**实现难度**：⭐⭐⭐ 高（需要在每个 forward 前后更新统计）
+**实现难度**：⭐⭐ 中（基于已有 `moe_stats.py`，需要添加 EMA 和反馈机制）
 
 ---
 
 ### 2.3 推荐的约束优先级
 
-| 优先级 | 约束 | 理由 |
-|-------|------|-----|
-| **P0** | Token Budget | 已有现成接口，直接可用 |
-| **P0** | KV Cache 容量 | 已有抢占机制，可观测 |
-| **P1** | 专家负载统计 | E1.1 已有部分基础，需扩展 |
-| **P1** | 质量约束 | 在 routing 层面修改，较清晰 |
-| **P2** | 跨 GPU 通信 | 需要深入 kernel，工作量大 |
+| 优先级 | 约束 | 理由 | vLLM 支持状态 |
+|-------|------|------|--------------|
+| **P0** | Token Budget | 已有现成接口，直接可用 | ✅ 完全支持 |
+| **P0** | KV Cache 容量 | 已有抢占机制，可观测 | ✅ 完全支持 |
+| **P1** | 专家负载统计 | E1.1 已有 `moe_stats.py` 基础 | ⚠️ 需扩展 |
+| **P1** | 质量约束 | 在 `_select_experts` 添加过滤 | ❌ 需实现 |
+| **P2** | 跨 GPU 通信 | 需修改 EP 层或添加 wrapper | ❌ 需大量开发 |
+
+### 2.4 数学模型与 vLLM 的对齐总结
+
+| 原模型假设 | vLLM 实际情况 | 对齐方案 |
+|-----------|-------------|---------|
+| 按专家累加计算约束 $\sum_e a_e u_e$ | 按请求累加 $\sum_r n_r$ | 等价：$\sum_e u_e = k \cdot \sum_r n_r$ |
+| 专家显存约束 $\sum_e X_e \cdot \text{size}$ | KV cache per-request 约束 | 分离建模：专家权重静态，KV 动态 |
+| 专家队列 $q_e(t)$ | 无显式队列 | 定义 virtual queue = batch 内负载 |
+| 质量约束 $(1-\epsilon)\max$ | 无原生支持 | 在 `_select_experts` 添加过滤 |
+| 通信流量 $F_{kk'}$ | EP dispatch/combine 隐式发生 | 添加监控 wrapper |
 
 ---
 
