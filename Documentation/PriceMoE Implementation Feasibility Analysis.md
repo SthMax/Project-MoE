@@ -143,19 +143,70 @@ self.max_model_len = vllm_config.model_config.max_model_len  # 单请求最大�
 | $n_r(t)$ | `num_scheduled_tokens[req_id]` | 请求 $r$ 在该步调度的 token 数 |
 | 约束检查 | `min(num_new_tokens, token_budget)` | 截断到剩余 budget |
 
-**数学抽象（更新）**：
+**数学抽象（更新 2026-01-23）**：
 
 原模型约束：$\sum_{e \in \mathcal{E}_k} a_e \cdot u_e(t) \leq C_k$
 
 vLLM 实际约束：$\sum_{r \in \mathcal{R}_{\text{scheduled}}} n_r(t) \leq C$
 
-**等价性证明**：设每个 token 平均激活 $k$ 个专家（Top-k），则：
-$$\sum_e u_e(t) = k \cdot \sum_r n_r(t)$$
+---
 
-若 $a_e = 1$（均匀计算开销），则：
-$$\sum_e a_e u_e(t) = k \cdot \sum_r n_r(t) \leq k \cdot C$$
+**等价性论证：从 Token 上限视角**
 
-因此 vLLM 的 token budget 约束隐式实现了专家层面的计算约束，只需将 $C_k = k \cdot C$。
+我们可以将约束从"专家计算开销"转换为"Token 调度上限"，这样更自然地对应 vLLM 的实现：
+
+1. **vLLM 约束的本质**：系统对每个调度周期可处理的 token 总数设有上限 $C$（即 `max_num_scheduled_tokens`）
+
+2. **与专家工作量的关系**：每个 token 被路由到 Top-$k$ 个专家，因此专家调用总数为：
+   $$\sum_e u_e(t) = k \cdot \sum_r n_r(t)$$
+
+3. **约束等价性**：由于 $k$ 是固定常数（如 Qwen-MoE 用 $k=4$，Mixtral 用 $k=2$），有：
+   $$\sum_e u_e \leq C' \quad \Leftrightarrow \quad \sum_r n_r \leq \frac{C'}{k} = C$$
+
+**结论**：vLLM 的 token budget 约束 **直接等价于** 对专家工作量总和的间接约束 $\sum_e u_e \leq k \cdot C$。
+
+---
+
+**关于 $a_e = 1$ 假设的合理性**
+
+原模型假设所有专家处理单个 token 的计算开销相同（$a_e = 1$）。基于 vLLM v0.13.0 代码验证，**这一假设是合理的**：
+
+1. **架构一致性**（代码证据来自 `unquantized_fused_moe_method.py` L136-180）：
+   ```python
+   # 所有专家共享相同的 hidden_size 和 intermediate_size
+   w13_weight = torch.empty(num_experts, 2*intermediate_size, hidden_size, ...)
+   w2_weight = torch.empty(num_experts, hidden_size, intermediate_size, ...)
+   ```
+   - `hidden_size` 和 `intermediate_size` 是**标量参数**，不是 per-expert 数组
+   - 权重张量形状为 `[num_experts, ...]`，所有专家维度完全相同
+
+2. **FLOPs 对称**：单个 token 通过任意专家的计算量完全相同：
+   - Gate proj (W1): $\text{hidden\_size} \times \text{intermediate\_size}$
+   - Up proj (W3): $\text{hidden\_size} \times \text{intermediate\_size}$
+   - Down proj (W2): $\text{intermediate\_size} \times \text{hidden\_size}$
+
+3. **主流模型验证**：Mixtral、Qwen-MoE、DeepSeek-V3 等均使用相同维度的专家网络
+
+**实际运行中的二阶效应**（不影响一阶建模）：
+
+| 因素 | 影响 | 是否打破 $a_e = 1$ |
+|------|------|---------------------|
+| 专家负载不均衡 | 不同专家被路由到的 token 数不同 | ❌ 否（这是 $u_e$ 的变化，不是 $a_e$） |
+| 批处理效率 | 高负载专家可能获得更好的 GPU 利用率 | ⚠️ 二阶效应，可忽略 |
+| 内存访问模式 | 专家权重的缓存命中率可能不同 | ⚠️ 实践中影响有限 |
+
+---
+
+**推荐的模型表述**
+
+将约束从"计算开销"改为"Token 调度上限"更加清晰：
+
+> 系统对每个调度周期可处理的 token 总数设有上限 $C$，即 $\sum_r n_r \leq C$，等价于对专家工作量的间接约束 $\sum_e u_e \leq k \cdot C$。
+
+这样做的好处：
+- ✅ 避免了对计算均匀性的显式假设（虽然该假设是合理的）
+- ✅ 直接对应 vLLM 的 `max_num_scheduled_tokens` 语义
+- ✅ 更符合实际调度器的工作方式（调度器先决定调度多少 token，路由决策在之后发生）
 
 **实现难度**：⭐ 低（已有现成接口，参数可配置）
 

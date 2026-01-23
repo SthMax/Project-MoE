@@ -8,7 +8,7 @@ Code Task:
 
 Model Task:
 
-1. Constraint 定义&code 对其；
+1. Constraint 定义&code 对齐；
 2. fluid model factor n；
 3. policy；
 4. 三张图片文档整理
