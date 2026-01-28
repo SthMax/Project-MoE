@@ -64,3 +64,88 @@ $$\text{Total\_Cost} = \text{Congestion\_Cost} + \lambda(t) \cdot \text{Divergen
 4.  **P3 (未来): Communication** —— 等你需要跨机推理时再考虑。
 
 你的师兄应该会非常喜欢关于 **"Divergence Threshold as a function of Load"** 这个点，这体现了对 Trade-off 的动态控制能力。
+
+---
+
+## 补充：vLLM 代码验证与约束映射（2026-01-28 更新）
+
+基于对 vLLM v0.13.0 代码的深入分析，以下是约束选择的进一步验证和补充。
+
+### 1. Token Budget 约束的等价性论证
+
+**原模型约束**：$\sum_{e \in \mathcal{E}_k} a_e \cdot u_e(t) \leq C_k$
+
+**vLLM 实际约束**：$\sum_{r \in \mathcal{R}_{\text{scheduled}}} n_r(t) \leq C$（即 `max_num_scheduled_tokens`）
+
+**等价性**：
+- 每个 token 被路由到 Top-$k$ 个专家，因此：$\sum_e u_e(t) = k \cdot \sum_r n_r(t)$
+- 由于 $k$ 是固定常数（如 Qwen-MoE 用 $k=4$，Mixtral 用 $k=2$）：
+  $$\sum_e u_e \leq C' \quad \Leftrightarrow \quad \sum_r n_r \leq \frac{C'}{k} = C$$
+
+**关于 $a_e = 1$ 假设**：基于 vLLM 代码验证（`unquantized_fused_moe_method.py`），所有专家共享相同的 `hidden_size` 和 `intermediate_size`，权重张量形状为 `[num_experts, ...]`。因此 $a_e = 1$ 假设是合理的。
+
+### 2. KV Cache 约束的特殊说明
+
+**关键结论：KV Cache 约束不影响 Router 层的决策。**
+
+原因：
+1. **两层架构分离**：
+   - **Scheduler 层（Request-level）**：管理 KV Cache 分配和抢占，决定哪些 requests 进入 batch
+   - **Router 层（Token-level）**：对已调度的 tokens 进行 expert 选择
+2. **时序关系**：Router 看到的 tokens 已经是 Scheduler "放行"的，KV Cache 约束在之前就已满足
+
+### 3. EP 模式下的 KV Cache（核心洞察）
+
+**问题**：在 EP（Expert Parallelism）模式下，KV Cache 是否会被复制到多个 GPU 上？
+
+**答案**：**是的，但这是因为 Attention 层的特性，与 EP 无关。vLLM 已经自动处理了这一点。**
+
+**架构理解**：
+
+MoE 模型的一个 Transformer 层包含两部分：
+1. **Attention 层**（产生 KV Cache）—— TP 模式下按 head 分割，纯 EP 模式下完整复制
+2. **MoE FFN 层**（有多个 experts）—— EP 模式下 experts 分散到各 GPU
+
+```
+                    ┌────────────────────────────────────┐
+                    │        Transformer Layer           │
+                    │  ┌──────────────────────────────┐  │
+ Input ────────────►│  │     Attention + KV Cache     │  │
+                    │  │   (TP: 按 head 分割)          │  │
+                    │  │   (纯 EP: 完整复制到各 GPU)   │  │
+                    │  └──────────────────────────────┘  │
+                    │              ↓                     │
+                    │  ┌──────────────────────────────┐  │
+                    │  │      MoE FFN Layer           │  │
+                    │  │   (EP: experts 分散到各 GPU)  │  │
+                    │  │   (All-to-All 交换 hidden)    │  │
+                    │  └──────────────────────────────┘  │
+                    └────────────────────────────────────┘
+```
+
+**关键洞察**（来自 `vLLM Distributed Parallelism Guide.md`）：
+
+| 维度 | 分割对象 | 影响对象 |
+|------|---------|---------|
+| **TP** | 权重矩阵按维度分割 | 所有 Dense 层（包括 Attention） |
+| **EP** | Experts 分到不同 GPU | **仅 MoE 层** |
+
+**这意味着**：
+- EP 只影响 MoE 层：All-to-All 通信只发生在 MoE FFN 层，不涉及 KV Cache
+- Attention 层独立于 EP：纯 EP 模式下每个 GPU 都有完整的 KV Cache
+
+### 4. 约束与 vLLM 层次对应总结
+
+| 约束类型 | vLLM 层次 | 是否需要在 Router 中建模 |
+|---------|----------|------------------------|
+| Token Budget | Scheduler + Router | ✅ 是（直接对应） |
+| KV Cache | Scheduler only | ❌ 否（已解耦） |
+| Expert Load ($\alpha q_e$) | Router | ✅ 是（核心创新） |
+| Quality/Divergence | Router | ⚠️ 可选（P2） |
+| Communication | MoE Layer (EP) | ⚠️ 可选（P3） |
+
+### 5. 对 PriceMoE 建模的影响
+
+- 在 PriceMoE 路由策略中，**不需要显式建模 KV Cache 约束**
+- KV Cache 的管理由 Scheduler 层负责，与 Router 的 expert 选择决策解耦
+- 只需关注 token budget 约束：$\sum_e u_e \leq k \cdot C$

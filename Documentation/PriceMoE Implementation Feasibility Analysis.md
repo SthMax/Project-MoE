@@ -373,6 +373,89 @@ vLLM 实际约束：
 
 ---
 
+#### 关于 EP 模式下 KV Cache 的处理（2026-01-28 更新）
+
+**问题**：在 EP（Expert Parallelism）模式下，KV Cache 是否会被复制到多个 GPU 上？
+
+**结论**：**是的，KV Cache 会被复制，但这是因为 Attention 层的特性，与 EP 无关。vLLM 已经自动处理了这一点。**
+
+**架构理解**：
+
+MoE 模型的一个 Transformer 层包含两部分：
+1. **Attention 层**（产生 KV Cache）—— TP 模式下按 head 分割，纯 EP 模式下完整复制
+2. **MoE FFN 层**（有多个 experts）—— EP 模式下 experts 分散到各 GPU
+
+```
+                    ┌────────────────────────────────────┐
+                    │        Transformer Layer           │
+                    │  ┌──────────────────────────────┐  │
+ Input ────────────►│  │     Attention + KV Cache     │  │
+                    │  │   (TP: 在 GPU 间按 head 分割)  │  │
+                    │  │   (纯 EP: 完整复制到各 GPU)   │  │
+                    │  └──────────────────────────────┘  │
+                    │              ↓                     │
+                    │  ┌──────────────────────────────┐  │
+                    │  │      MoE FFN Layer           │  │
+                    │  │   (EP: experts 分散到各 GPU)  │  │
+                    │  │   (All-to-All 交换 hidden)    │  │
+                    │  └──────────────────────────────┘  │
+                    └────────────────────────────────────┘
+```
+
+**关键洞察**（来自 `vLLM Distributed Parallelism Guide.md`）：
+
+| 维度 | 分割对象 | 影响对象 |
+|------|---------|---------|
+| **TP** | 权重矩阵按维度分割 | **所有 Dense 层（包括 Attention）** |
+| **EP** | Experts 分到不同 GPU | **仅 MoE 层** |
+
+**这意味着**：
+
+1. **EP 只影响 MoE 层**：All-to-All 通信只发生在 MoE FFN 层，不涉及 KV Cache
+2. **Attention 层独立于 EP**：
+   - 同时启用 TP：KV Cache 按 head 维度分割
+   - 未启用 TP（纯 EP）：每个 GPU 都有完整的 Attention 权重和 KV Cache
+
+**对 PriceMoE 模型的影响**：
+
+✅ **好消息：KV Cache 约束仍然不影响 Router 层的决策**
+
+原因：
+1. **KV Cache 约束在 Scheduler 层**：Scheduler 决定哪些 requests 进入 batch
+2. **EP 下的 All-to-All 在 MoE 层**：只涉及 hidden states 的交换，不涉及 KV Cache
+3. **每个 GPU 的 KV Cache 容量**：仍然由 Scheduler 管理，与 EP 无关
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Scheduler                            │
+│   KV Cache 约束在这里生效                                    │
+│   决定 batch 中有哪些 requests                               │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│                  Model Forward (per GPU)                    │
+│                                                             │
+│  1. Attention Layer                                         │
+│     - 每个 GPU 有自己的 KV Cache                             │
+│     - TP 模式: KV Cache 按 head 分割                         │
+│     - 纯 EP 模式: KV Cache 完整复制                          │
+│                                                             │
+│  2. MoE Layer (EP 发生在这里)                                │
+│     - All-to-All 交换 hidden states                         │
+│     - 各 GPU 计算本地的 experts                              │
+│     - All-to-All 收回结果                                    │
+│     - ❌ 不涉及 KV Cache                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**结论**：
+- EP 模式下 KV Cache 确实会被"复制"到各 GPU（如果没有 TP）
+- vLLM 已经自动处理了这一点
+- 这不改变约束分析：KV Cache 约束仍然在 Scheduler 层，与 Router 的 expert 选择决策无关
+- PriceMoE 模型假设仍然有效：只需关注 token budget 约束 $\sum_e u_e \leq k \cdot C$
+
+---
+
 #### 约束 3：跨 GPU 通信（EP All-to-All）
 
 **数学形式**：
