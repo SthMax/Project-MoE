@@ -11,11 +11,36 @@
 
 ## 快速导航
 
-- **（推荐从这里读）PriceMoE 落地可行性分析**：`Documentation/PriceMoE Implementation Feasibility Analysis.md`
-- **PriceMoE 数学模型（最新）**：`Model/PriceMoE_Final_Model_v2.1.md`
-- **vLLM MoE 推理流程梳理（v0.13.0）**：`Documentation/vLLM MoE Inference Walkthrough (v0.13.0).md`
-- **分布式并行（TP/PP/EP/DP）指南**：`Documentation/vLLM Distributed Parallelism Guide.md`
-- **实验 1.1（expert activation 分布/路由统计）**：`Code/Verification/E1.1/`
+### 📐 PriceMoE 模型
+
+| 文档 | 说明 | 适用场景 |
+|------|------|---------|
+| `Model/PriceMoE_Final_Model_v2.1.md` | OR 版本数学模型（主线） | MS/OR 投稿、理论推导 |
+| `Model/Model_Coding_Version.md` | 工程适配版本 | 合作对齐、代码实现 |
+| `Model/Constraint Survey.md`（**deprecated**） | **初版**约束体系调研 | 理解约束选择的背景 |
+
+### 🔧 vLLM 工程分析
+
+| 文档 | 说明 |
+|------|------|
+| `Documentation/PriceMoE Implementation Feasibility Analysis.md` | **建议优先阅读** ⭐ 结合代码分析约束的实际意义与实现路径 |
+| `Documentation/PriceMoE Model Constraint Overview.md` | **最新的约束调研**：列举选择/不选择每个约束的原因 |
+| `Documentation/vLLM MoE Inference Walkthrough (v0.13.0).md` | vLLM MoE 推理流程全景梳理 |
+| `Documentation/vLLM Scheduler schedule() 逐段解读.md` | Scheduler 核心函数逐行解析 |
+| `Documentation/vLLM Distributed Parallelism Guide.md` | TP/PP/EP/DP 分布式并行指南 |
+| `Documentation/Expert Replication in vLLM Analysis.md` | 专家复制机制分析 |
+
+### 🔬 实验
+
+| 实验 | 目录 | 说明 |
+|------|------|------|
+| E1.1 | `Code/Verification/E1.1/` | 多数据集观察 expert activation 分布（验证 arrival process） |
+
+### 📚 Q&A 与讨论记录
+
+| 文档 | 说明 |
+|------|------|
+| `Documentation/Q&A/20260128 vLLM & Model Review.md` | vLLM 代码与模型对齐问题讨论 |
 
 ## Folder Structure
 
