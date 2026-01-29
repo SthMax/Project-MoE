@@ -266,16 +266,16 @@ def compare_runs(run_dirs: list[Path]) -> dict:
     # Determine if this is a throughput benchmark (has requests_per_second)
     is_throughput_benchmark = any(r.get("requests_per_second") for r in results)
     
-    print("\n" + "-"*110)
+    print("\n" + "-"*120)
     print("RANKING BY LOAD BALANCE (lower is better)")
-    print("-"*110)
+    print("-"*120)
     
     if is_throughput_benchmark:
-        header = f"{'Rank':<5} {'Run Name':<40} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
+        header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
     else:
-        header = f"{'Rank':<5} {'Run Name':<45} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
+        header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
     print(header)
-    print("-"*110)
+    print("-"*120)
     
     baseline_imb = None
     baseline_gini = None
@@ -301,11 +301,11 @@ def compare_runs(run_dirs: list[Path]) -> dict:
         if is_throughput_benchmark:
             req_str = f"{req_per_sec:.2f}" if req_per_sec else "N/A"
             tok_str = f"{tok_per_sec:.1f}" if tok_per_sec else "N/A"
-            print(f"{i+1:<5} {r['run_name'][:40]:<40} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
+            print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
         else:
             ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "inf"
             tput_str = f"{throughput:.2f}/s" if throughput else "N/A"
-            print(f"{i+1:<5} {r['run_name'][:45]:<45} {mode:<12} {imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
+            print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
     
     # Compute improvements
     print("\n" + "-"*80)
@@ -324,7 +324,7 @@ def compare_runs(run_dirs: list[Path]) -> dict:
             
             if imb != float("inf") and baseline_imb > 0:
                 imb_reduction = (1 - imb / baseline_imb) * 100
-                print(f"  {r['run_name'][:50]}:")
+                print(f"  {r['run_name'][:60]}:")
                 print(f"    Imbalance: {baseline_imb:.3f} → {imb:.3f} (↓ {imb_reduction:.1f}%)")
                 if baseline_gini and gini != float("inf"):
                     gini_reduction = (1 - gini / baseline_gini) * 100
