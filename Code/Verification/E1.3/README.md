@@ -176,3 +176,46 @@ E1.3/
 2. **PPL calculation**: Uses vLLM's `prompt_logprobs` feature.
 3. **Throughput benchmark**: Requires separate server mode; see `scripts/run_throughput.sh`.
 4. **Stability**: For TP=4, use `enforce_eager: true` to avoid CUDA graph issues.
+
+## Commands:
+
+阶段 2: Baseline 对照实验
+目的：获取原始路由的 PPL 和负载分布作为基准
+
+```bash
+python -m src.run_experiment --config configs/e1_3_baseline.json
+```
+
+这会运行更多样本（1000条），输出保存在 outputs/runs/<timestamp>_e1_3_baseline/。
+
+阶段 3: PriceMoE 实验
+目的：测试 PriceMoE 是否能在保持 PPL 的同时改善负载均衡
+
+```bash
+# 使用默认 α=0.1
+python -m src.run_experiment --config configs/e1_3_price_moe.json
+
+# 或者自定义 α
+python -m src.run_experiment --config configs/e1_3_price_moe.json --routing.alpha 0.2
+```
+
+阶段 4: 分析对比结果
+```bash
+# 对比所有运行结果
+python -m src.analyze_load_balance outputs/runs/ --compare
+
+```
+
+输出示例：
+
+```
+RANKING BY PPL (lower is better)
+-----
+Rank  Run Name                      Mode        PPL       Throughput
+1     e1_3_baseline                 baseline    3.4521    12.5/s
+2     e1_3_price_moe_alpha0.1       price_moe   3.5102    12.1/s (+1.7%)
+3     e1_3_price_moe_alpha0.2       price_moe   3.6834    11.8/s (+6.7%)
+```
+
+完整参数扫描（可选）
+

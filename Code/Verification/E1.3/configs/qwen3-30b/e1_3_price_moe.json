@@ -1,9 +1,9 @@
 {
-  "run_id": "e1_3_baseline",
-  "description": "Baseline: Original vLLM top-k routing (no modifications)",
+  "run_id": "e1_3_price_moe_30b",
+  "description": "PriceMoE MVP: Congestion-aware routing with shadow price α·q_e - Qwen3-30B",
   
   "model": {
-    "model_id": "Qwen/Qwen3-30B-A3B-Instruct",
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
     "tensor_parallel_size": 4,
     "max_model_len": 4096,
     "max_num_seqs": 16,
@@ -14,11 +14,12 @@
   },
   
   "routing": {
-    "mode": "baseline",
+    "mode": "price_moe",
     "top_k": null,
-    "alpha": null,
-    "ema_decay": null,
-    "use_original_weights": null
+    "alpha": 0.1,
+    "ema_decay": 0.9,
+    "use_original_weights": true,
+    "_comment": "alpha range to sweep: [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]"
   },
   
   "generation": {

@@ -91,10 +91,15 @@ def run_single_domain(
     model_cfg = config.get("model", {})
     max_tokens = model_cfg.get("max_tokens", 1)  # For PPL, we just do forward pass
     
+    # Note: prompt_logprobs=1 is extremely expensive (stores vocab_size logits per token)
+    # For smoke tests, we skip PPL and just test routing functionality
+    eval_cfg = config.get("evaluation", {})
+    compute_ppl = eval_cfg.get("compute_ppl", False)
+    
     sampling_params = SamplingParams(
         max_tokens=max_tokens,
         temperature=0.0,  # Greedy for reproducibility
-        prompt_logprobs=1,  # Required for PPL calculation
+        prompt_logprobs=1 if compute_ppl else None,  # Only enable if PPL needed
     )
     
     # Clear routing stats before run
@@ -105,7 +110,7 @@ def run_single_domain(
     # Clear PriceMoE router state
     price_moe = get_price_moe_router()
     if price_moe is not None:
-        price_moe.clear_all_routers()
+        price_moe.reset_all_routers()
     
     # Run generation
     start_time = time.time()
@@ -140,10 +145,11 @@ def run_single_domain(
     price_moe_stats = {}
     if price_moe is not None:
         try:
-            routers = price_moe.get_all_routers()
-            for router_key, router in routers.items():
-                stats = router.get_stats()
-                price_moe_stats[router_key] = stats
+            # get_all_router_stats() returns a list of stats dicts
+            all_stats = price_moe.get_all_router_stats()
+            for stats in all_stats:
+                layer_name = stats.get("layer_name", "unknown")
+                price_moe_stats[layer_name] = stats
         except Exception as e:
             print(f"[E1.3] Warning: failed to get PriceMoE stats: {e}")
     
@@ -178,6 +184,12 @@ def run_experiment(config: dict, output_dir: Path) -> dict:
     # Setup environment variables for routing
     routing_cfg = config.get("routing", {})
     set_vars = setup_routing_env(routing_cfg)
+    
+    # Enable moe_stats collection by setting VLLM_MOE_STATS_DIR
+    # This allows record_topk() to collect stats in-memory
+    os.environ["VLLM_MOE_STATS_DIR"] = str(output_dir / "moe_stats")
+    set_vars["VLLM_MOE_STATS_DIR"] = str(output_dir / "moe_stats")
+    
     print(f"[E1.3] Environment variables set: {set_vars}")
     
     try:

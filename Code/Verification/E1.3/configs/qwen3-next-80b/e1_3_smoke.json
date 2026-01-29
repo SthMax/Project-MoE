@@ -1,9 +1,9 @@
 {
-  "run_id": "e1_3_smoke",
-  "description": "Quick sanity check for PriceMoE routing",
+  "run_id": "e1_3_smoke_80b",
+  "description": "Quick sanity check for PriceMoE routing - Qwen3-Next-80B",
   
   "model": {
-    "model_id": "Qwen/Qwen3-30B-A3B-Instruct",
+    "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",
     "tensor_parallel_size": 4,
     "max_model_len": 4096,
     "max_num_seqs": 8,
@@ -27,7 +27,7 @@
   },
   
   "evaluation": {
-    "compute_ppl": true,
+    "compute_ppl": false,
     "collect_routing_stats": true,
     "benchmark_throughput": false
   },

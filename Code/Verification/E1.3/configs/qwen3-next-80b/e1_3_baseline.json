@@ -1,0 +1,72 @@
+{
+  "run_id": "e1_3_baseline_80b",
+  "description": "Baseline: Original vLLM top-k routing (no modifications) - Qwen3-Next-80B",
+  
+  "model": {
+    "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 16,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true
+  },
+  
+  "routing": {
+    "mode": "baseline",
+    "top_k": null,
+    "alpha": null,
+    "ema_decay": null,
+    "use_original_weights": null
+  },
+  
+  "generation": {
+    "max_tokens": 1,
+    "temperature": 0.0
+  },
+  
+  "evaluation": {
+    "compute_ppl": false,
+    "collect_routing_stats": true,
+    "benchmark_throughput": false
+  },
+  
+  "data": {
+    "seed": 1234,
+    "n_examples": 500,
+    "max_prompt_tokens": 512
+  },
+  
+  "domains": {
+    "wikitext": {
+      "hf_dataset": {
+        "path": "wikitext",
+        "name": "wikitext-103-raw-v1",
+        "split": "train",
+        "text_field": "text"
+      }
+    },
+    "humaneval": {
+      "hf_dataset": {
+        "path": "openai_humaneval",
+        "name": null,
+        "split": "test",
+        "text_field": "prompt"
+      },
+      "n_examples": 164,
+      "allow_fewer_examples": true
+    },
+    "gsm8k": {
+      "hf_dataset": {
+        "path": "openai/gsm8k",
+        "name": "main",
+        "split": "test",
+        "text_field": "question"
+      },
+      "n_examples": 500
+    }
+  },
+  
+  "output_root": "Code/Verification/E1.3/outputs/runs"
+}
