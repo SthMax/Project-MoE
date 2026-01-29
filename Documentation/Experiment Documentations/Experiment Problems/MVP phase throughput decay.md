@@ -200,4 +200,4 @@ with torch.no_grad():
 2. **Throughput 由每个 batch 的 max 决定（木桶效应）**
 3. **减小 EMA decay 或使用当前 batch 负载可能改善 throughput**
 
-建议先用 `VLLM_PRICE_MOE_EMA_DECAY=0.0` 或 `0.1` 做一组实验，看是否能在保持负载均衡的同时提升 throughput。
+建议先用 `VLLM_PRICE_MOE_EMA_DECAY=0.0` 或 `0.1` 做一组实验，看是否能在保持负载均衡的同时提升 throughput
