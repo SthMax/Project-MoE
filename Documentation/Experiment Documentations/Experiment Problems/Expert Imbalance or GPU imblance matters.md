@@ -268,4 +268,4 @@ python benchmark.py
 
 **我建议先做两个快速实验**：
 1. `alpha=0` 测试 → 确认 overhead
-2. 添加 per-GPU 负载统计 → 确认优化目标是否正确
+2. 添加 per-GPU 负载统计 → 确认优化目标是否正确you dia有嗲不过
