@@ -1,0 +1,48 @@
+{
+  "run_id": "e1_3_throughput_high_load",
+  "description": "High-load throughput benchmark to stress-test EP and load balancing - Qwen3-30B",
+  
+  "model": {
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "tensor_parallel_size": 4,
+    "max_model_len": 8192,
+    "max_num_seqs": 128,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "enable_expert_parallel": true
+  },
+  
+  "routing": {
+    "mode": "price_moe",
+    "top_k": null,
+    "alpha": 0.005,
+    "ema_decay": 0.9,
+    "use_original_weights": true
+  },
+  
+  "throughput": {
+    "num_prompts": 2000,
+    "input_len": 512,
+    "output_len": 256
+  },
+  
+  "data": {
+    "seed": 1234,
+    "n_examples": 3000,
+    "max_prompt_tokens": 1024
+  },
+  
+  "domains": {
+    "wikitext": {
+      "hf_dataset": {
+        "path": "wikitext",
+        "name": "wikitext-103-raw-v1",
+        "split": "train",
+        "text_field": "text"
+      }
+    }
+  },
+  
+  "output_root": "Code/Verification/E1.3/outputs/runs"
+}

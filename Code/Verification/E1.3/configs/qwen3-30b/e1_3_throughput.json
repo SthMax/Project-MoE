@@ -1,6 +1,6 @@
 {
   "run_id": "e1_3_throughput_30b",
-  "description": "PriceMoE throughput benchmark with high concurrency - Qwen3-30B",
+  "description": "PriceMoE throughput benchmark with Expert Parallelism - Qwen3-30B",
   
   "model": {
     "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
@@ -10,34 +10,21 @@
     "dtype": "auto",
     "trust_remote_code": true,
     "enforce_eager": true,
-    "disable_custom_all_reduce": true
+    "enable_expert_parallel": true
   },
   
   "routing": {
     "mode": "price_moe",
     "top_k": null,
-    "alpha": 0.1,
+    "alpha": 0.005,
     "ema_decay": 0.9,
     "use_original_weights": true
   },
   
-  "generation": {
-    "max_tokens": 128,
-    "temperature": 0.0
-  },
-  
-  "evaluation": {
-    "compute_ppl": true,
-    "collect_routing_stats": true,
-    "benchmark_throughput": true
-  },
-  
   "throughput": {
-    "num_prompts": 1000,
-    "input_len": 512,
-    "output_len": 128,
-    "concurrency_levels": [1, 4, 8, 16, 32],
-    "request_rate": "inf"
+    "num_prompts": 500,
+    "input_len": 256,
+    "output_len": 128
   },
   
   "data": {
