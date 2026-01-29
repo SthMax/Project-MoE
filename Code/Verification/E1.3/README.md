@@ -183,7 +183,7 @@ E1.3/
 目的：获取原始路由的 PPL 和负载分布作为基准
 
 ```bash
-python -m src.run_experiment --config configs/e1_3_baseline.json
+python -m src.run_experiment --config configs/qwen3-next-80b/e1_3_baseline.json
 ```
 
 这会运行更多样本（1000条），输出保存在 outputs/runs/<timestamp>_e1_3_baseline/。
@@ -193,10 +193,10 @@ python -m src.run_experiment --config configs/e1_3_baseline.json
 
 ```bash
 # 使用默认 α=0.1
-python -m src.run_experiment --config configs/e1_3_price_moe.json
+python -m src.run_experiment --config configs/qwen3-next-80b/e1_3_price_moe.json
 
 # 或者自定义 α
-python -m src.run_experiment --config configs/e1_3_price_moe.json --routing.alpha 0.2
+python -m src.run_experiment --config configs/qwen3-next-80b/e1_3_price_moe.json --routing.alpha 0.2
 ```
 
 阶段 4: 分析对比结果
