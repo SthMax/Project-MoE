@@ -1,0 +1,35 @@
+{
+    "_comment": "E1.3 Online Serving Benchmark - Compare latency under high concurrency",
+    "experiment_name": "e1_3_online_benchmark",
+    
+    "model": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "tensor_parallel_size": 4,
+    "trust_remote_code": true,
+    "max_model_len": 8192,
+    "gpu_memory_utilization": 0.92,
+    
+    "routing": {
+        "mode": "price_moe",
+        "alpha": 0.1,
+        "ema_decay": 0.9,
+        "use_original_weights": true
+    },
+    
+    "benchmark": {
+        "mode": "online",
+        "num_prompts": 500,
+        "request_rate": 10,
+        "input_len_range": [128, 512],
+        "output_len_range": [64, 256],
+        "warmup_requests": 50
+    },
+    
+    "metrics": [
+        "ttft_p50", "ttft_p99",
+        "tpot_p50", "tpot_p99", 
+        "throughput_qps",
+        "request_latency_p50", "request_latency_p99"
+    ],
+    
+    "output_dir": "outputs/runs"
+}

@@ -260,6 +260,108 @@ def run_experiment(config: dict, output_dir: Path) -> dict:
         cleanup_routing_env(set_vars)
 
 
+def run_throughput_benchmark(config: dict, output_dir: Path) -> dict:
+    """
+    Run throughput benchmark using vLLM's built-in benchmark.
+    
+    This is more suitable for measuring actual throughput gains from PriceMoE
+    in EP mode or high-concurrency scenarios.
+    """
+    import subprocess
+    import shutil
+    
+    print("[E1.3] === Starting Throughput Benchmark ===")
+    
+    # Setup environment variables for routing
+    routing_cfg = config.get("routing", {})
+    set_vars = setup_routing_env(routing_cfg)
+    
+    # Enable moe_stats collection
+    os.environ["VLLM_MOE_STATS_DIR"] = str(output_dir / "moe_stats")
+    set_vars["VLLM_MOE_STATS_DIR"] = str(output_dir / "moe_stats")
+    (output_dir / "moe_stats").mkdir(parents=True, exist_ok=True)
+    
+    print(f"[E1.3] Routing mode: {routing_cfg.get('mode', 'baseline')}")
+    print(f"[E1.3] Environment variables set: {set_vars}")
+    
+    try:
+        # Build benchmark command
+        model_cfg = config["model"]
+        throughput_cfg = config.get("throughput", {})
+        
+        cmd = [
+            sys.executable, "-m", "vllm.entrypoints.cli.main", "bench", "throughput",
+            "--model", model_cfg["model_id"],
+            "--tensor-parallel-size", str(model_cfg.get("tensor_parallel_size", 1)),
+            "--num-prompts", str(throughput_cfg.get("num_prompts", 500)),
+            "--input-len", str(throughput_cfg.get("input_len", 256)),
+            "--output-len", str(throughput_cfg.get("output_len", 128)),
+            "--output-json", str(output_dir / "benchmark_results.json"),
+        ]
+        
+        # Add optional flags
+        if model_cfg.get("trust_remote_code", False):
+            cmd.append("--trust-remote-code")
+        
+        if model_cfg.get("enforce_eager", False):
+            cmd.append("--enforce-eager")
+        
+        if model_cfg.get("enable_expert_parallel", False):
+            cmd.append("--enable-expert-parallel")
+        
+        max_model_len = model_cfg.get("max_model_len")
+        if max_model_len:
+            cmd.extend(["--max-model-len", str(max_model_len)])
+        
+        print(f"[E1.3] Running: {' '.join(cmd)}")
+        
+        # Run benchmark
+        log_file = output_dir / "benchmark.log"
+        with open(log_file, "w") as f:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=os.environ.copy(),
+            )
+            f.write(result.stdout)
+            print(result.stdout)
+        
+        if result.returncode != 0:
+            print(f"[E1.3] Warning: Benchmark exited with code {result.returncode}")
+        
+        # Load and return results
+        results_file = output_dir / "benchmark_results.json"
+        if results_file.exists():
+            benchmark_results = load_json(results_file)
+            
+            # Create summary
+            summary = {
+                "config": config,
+                "routing_mode": routing_cfg.get("mode", "baseline"),
+                "routing_params": routing_cfg,
+                "benchmark_results": benchmark_results,
+                "timestamp": datetime.now().isoformat(),
+            }
+            
+            # Save summary
+            save_json(summary, output_dir / "summary.json")
+            
+            print(f"\n[E1.3] === Benchmark Complete ===")
+            print(f"[E1.3] Throughput: {benchmark_results.get('requests_per_second', 0):.2f} req/s")
+            print(f"[E1.3] Tokens/s: {benchmark_results.get('tokens_per_second', 0):.2f}")
+            print(f"[E1.3] Results saved to {output_dir}")
+            
+            return summary
+        else:
+            print(f"[E1.3] Error: No benchmark results found")
+            return {}
+    
+    finally:
+        cleanup_routing_env(set_vars)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="E1.3: PriceMoE MVP Experiment Runner"
@@ -269,6 +371,14 @@ def main():
         type=str,
         required=True,
         help="Path to config JSON file",
+    )
+    parser.add_argument(
+        "--mode", "-m",
+        type=str,
+        choices=["ppl", "throughput", "both"],
+        default="ppl",
+        help="Experiment mode: 'ppl' for PPL evaluation (default), "
+             "'throughput' for throughput benchmark, 'both' for both",
     )
     parser.add_argument(
         "--output-dir", "-o",
@@ -318,15 +428,41 @@ def main():
             k = config.get("routing", {}).get("top_k", "default")
             run_name = f"{run_name}_k{k}"
         
-        output_dir = base_dir / f"{timestamp}_{run_name}"
+        # Extract model short name for subdirectory
+        model_id = config.get("model", {}).get("model_id", "unknown")
+        # e.g. "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8" -> "qwen3-next-80b"
+        # e.g. "Qwen/Qwen3-30B-A3B-Instruct-2507" -> "qwen3-30b"
+        model_short = model_id.split("/")[-1].lower()
+        # Simplify common patterns
+        for suffix in ["-instruct", "-fp8", "-a3b", "-2507"]:
+            model_short = model_short.replace(suffix, "")
+        model_short = model_short.replace("--", "-").strip("-")
+        
+        # Create subdirectory per model: outputs/runs/{model_short}/{timestamp}_{run_name}
+        output_dir = base_dir / model_short / f"{timestamp}_{run_name}"
     
     output_dir = ensure_dir(output_dir)
     
     # Save effective config
     save_json(config, output_dir / "config.json")
     
-    # Run experiment
-    run_experiment(config, output_dir)
+    # Run experiment based on mode
+    if args.mode == "ppl":
+        run_experiment(config, output_dir)
+    elif args.mode == "throughput":
+        run_throughput_benchmark(config, output_dir)
+    elif args.mode == "both":
+        # Run both PPL and throughput
+        ppl_dir = output_dir / "ppl"
+        throughput_dir = output_dir / "throughput"
+        ppl_dir.mkdir(parents=True, exist_ok=True)
+        throughput_dir.mkdir(parents=True, exist_ok=True)
+        
+        print("[E1.3] Running PPL evaluation...")
+        run_experiment(config, ppl_dir)
+        
+        print("\n[E1.3] Running throughput benchmark...")
+        run_throughput_benchmark(config, throughput_dir)
 
 
 if __name__ == "__main__":

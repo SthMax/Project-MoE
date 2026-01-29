@@ -1,0 +1,48 @@
+{
+  "run_id": "e1_3_throughput_baseline_30b",
+  "description": "Baseline throughput benchmark with Expert Parallelism - Qwen3-30B",
+  
+  "model": {
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 32,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "enable_expert_parallel": true
+  },
+  
+  "routing": {
+    "mode": "baseline",
+    "top_k": null,
+    "alpha": null,
+    "ema_decay": null,
+    "use_original_weights": null
+  },
+  
+  "throughput": {
+    "num_prompts": 500,
+    "input_len": 256,
+    "output_len": 128
+  },
+  
+  "data": {
+    "seed": 1234,
+    "n_examples": 500,
+    "max_prompt_tokens": 256
+  },
+  
+  "domains": {
+    "wikitext": {
+      "hf_dataset": {
+        "path": "wikitext",
+        "name": "wikitext-103-raw-v1",
+        "split": "train",
+        "text_field": "text"
+      }
+    }
+  },
+  
+  "output_root": "Code/Verification/E1.3/outputs/runs"
+}

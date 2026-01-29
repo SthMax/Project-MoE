@@ -103,23 +103,66 @@ def analyze_single_run(run_dir: Path) -> dict:
     """
     Analyze a single experiment run.
     
+    Supports two formats:
+    1. PPL mode: summary.json with domain results
+    2. Throughput mode: benchmark_results.json + config.json
+    
     Returns:
         Dictionary with analysis results.
     """
     summary_path = run_dir / "summary.json"
-    if not summary_path.exists():
-        raise FileNotFoundError(f"Summary not found: {summary_path}")
+    benchmark_path = run_dir / "benchmark_results.json"
+    config_path = run_dir / "config.json"
     
-    summary = load_json(summary_path)
+    # Determine which format we have
+    if summary_path.exists():
+        # PPL mode - original format
+        summary = load_json(summary_path)
+        routing_mode = summary.get('routing_mode', 'unknown')
+        routing_params = summary.get('routing_params', {})
+        avg_ppl = summary.get('average_ppl', float('inf'))
+        throughput = summary.get('overall_throughput', 0)
+        total_examples = summary.get('total_examples', 0)
+        domains = summary.get("domains", [])
+    elif benchmark_path.exists():
+        # Throughput benchmark mode
+        benchmark = load_json(benchmark_path)
+        config = load_json(config_path) if config_path.exists() else {}
+        
+        routing_mode = config.get('mode', config.get('routing', {}).get('mode', 'unknown'))
+        routing_params = config.get('routing', config)
+        avg_ppl = float('inf')  # No PPL in throughput mode
+        throughput = benchmark.get('requests_per_second', 0)
+        total_examples = benchmark.get('num_prompts', 0)
+        domains = []
+        
+        # Create a pseudo-summary for throughput mode
+        summary = {
+            "routing_mode": routing_mode,
+            "routing_params": routing_params,
+            "benchmark": benchmark,
+        }
+    else:
+        raise FileNotFoundError(f"No summary.json or benchmark_results.json found in: {run_dir}")
     
     print(f"\n{'='*60}")
     print(f"Run: {run_dir.name}")
     print(f"{'='*60}")
-    print(f"Routing mode: {summary.get('routing_mode', 'unknown')}")
-    print(f"Routing params: {summary.get('routing_params', {})}")
-    print(f"Average PPL: {summary.get('average_ppl', 'N/A'):.4f}")
-    print(f"Throughput: {summary.get('overall_throughput', 'N/A'):.2f} examples/s")
-    print(f"Total examples: {summary.get('total_examples', 0)}")
+    print(f"Routing mode: {routing_mode}")
+    print(f"Routing params: {routing_params}")
+    
+    if avg_ppl != float('inf'):
+        print(f"Average PPL: {avg_ppl:.4f}")
+    
+    if benchmark_path.exists():
+        benchmark = load_json(benchmark_path)
+        print(f"Throughput: {benchmark.get('requests_per_second', 0):.2f} req/s")
+        print(f"Token/s: {benchmark.get('tokens_per_second', 0):.2f}")
+        print(f"Elapsed time: {benchmark.get('elapsed_time', 0):.2f} s")
+    else:
+        print(f"Throughput: {throughput:.2f} examples/s")
+    
+    print(f"Total examples: {total_examples}")
     
     # Load npz stats from moe_stats/ directory
     npz_stats = load_npz_stats(run_dir)
@@ -172,13 +215,20 @@ def analyze_single_run(run_dir: Path) -> dict:
     
     result = {
         "run_name": run_dir.name,
-        "routing_mode": summary.get("routing_mode"),
-        "routing_params": summary.get("routing_params"),
-        "average_ppl": summary.get("average_ppl"),
-        "throughput": summary.get("overall_throughput"),
-        "total_examples": summary.get("total_examples"),
+        "routing_mode": routing_mode,
+        "routing_params": routing_params,
+        "average_ppl": avg_ppl,
+        "throughput": throughput,
+        "total_examples": total_examples,
         "num_domains": len(domains),
     }
+    
+    # Add benchmark-specific fields if available
+    if benchmark_path.exists():
+        benchmark = load_json(benchmark_path)
+        result["requests_per_second"] = benchmark.get("requests_per_second", 0)
+        result["tokens_per_second"] = benchmark.get("tokens_per_second", 0)
+        result["elapsed_time"] = benchmark.get("elapsed_time", 0)
     
     # Add npz stats to result
     if npz_stats:
@@ -213,37 +263,53 @@ def compare_runs(run_dirs: list[Path]) -> dict:
     # Sort by load imbalance (lower is better)
     results.sort(key=lambda x: x.get("load_imbalance_avg", float("inf")))
     
-    print("\n" + "-"*100)
+    # Determine if this is a throughput benchmark (has requests_per_second)
+    is_throughput_benchmark = any(r.get("requests_per_second") for r in results)
+    
+    print("\n" + "-"*110)
     print("RANKING BY LOAD BALANCE (lower is better)")
-    print("-"*100)
-    header = f"{'Rank':<5} {'Run Name':<45} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
+    print("-"*110)
+    
+    if is_throughput_benchmark:
+        header = f"{'Rank':<5} {'Run Name':<40} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
+    else:
+        header = f"{'Rank':<5} {'Run Name':<45} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
     print(header)
-    print("-"*100)
+    print("-"*110)
     
     baseline_imb = None
     baseline_gini = None
+    baseline_tput = None
     for i, r in enumerate(results):
         mode = r.get("routing_mode", "?")
         imb = r.get("load_imbalance_avg", float("inf"))
         gini = r.get("gini", float("inf"))
         ppl = r.get("average_ppl", float("inf"))
         throughput = r.get("throughput", 0)
+        req_per_sec = r.get("requests_per_second", 0)
+        tok_per_sec = r.get("tokens_per_second", 0)
         
         if mode == "baseline":
             baseline_imb = imb
             baseline_gini = gini
+            baseline_tput = req_per_sec if req_per_sec else throughput
         
         # Show delta compared to baseline
         imb_str = f"{imb:.3f}" if imb != float("inf") else "N/A"
         gini_str = f"{gini:.4f}" if gini != float("inf") else "N/A"
-        ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "inf"
-        tput_str = f"{throughput:.2f}/s" if throughput else "N/A"
         
-        print(f"{i+1:<5} {r['run_name'][:45]:<45} {mode:<12} {imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
+        if is_throughput_benchmark:
+            req_str = f"{req_per_sec:.2f}" if req_per_sec else "N/A"
+            tok_str = f"{tok_per_sec:.1f}" if tok_per_sec else "N/A"
+            print(f"{i+1:<5} {r['run_name'][:40]:<40} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
+        else:
+            ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "inf"
+            tput_str = f"{throughput:.2f}/s" if throughput else "N/A"
+            print(f"{i+1:<5} {r['run_name'][:45]:<45} {mode:<12} {imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
     
     # Compute improvements
     print("\n" + "-"*80)
-    print("LOAD BALANCE IMPROVEMENTS vs BASELINE")
+    print("IMPROVEMENTS vs BASELINE")
     print("-"*80)
     
     if baseline_imb is not None and baseline_imb != float("inf"):
@@ -253,6 +319,8 @@ def compare_runs(run_dirs: list[Path]) -> dict:
                 continue
             imb = r.get("load_imbalance_avg", float("inf"))
             gini = r.get("gini", float("inf"))
+            req_per_sec = r.get("requests_per_second", 0)
+            tok_per_sec = r.get("tokens_per_second", 0)
             
             if imb != float("inf") and baseline_imb > 0:
                 imb_reduction = (1 - imb / baseline_imb) * 100
@@ -261,6 +329,16 @@ def compare_runs(run_dirs: list[Path]) -> dict:
                 if baseline_gini and gini != float("inf"):
                     gini_reduction = (1 - gini / baseline_gini) * 100
                     print(f"    Gini:      {baseline_gini:.4f} → {gini:.4f} (↓ {gini_reduction:.1f}%)")
+                
+                # Throughput improvement (for EP benchmark)
+                if baseline_tput and baseline_tput > 0:
+                    current_tput = req_per_sec if req_per_sec else r.get("throughput", 0)
+                    if current_tput:
+                        tput_change = (current_tput / baseline_tput - 1) * 100
+                        arrow = "↑" if tput_change > 0 else "↓"
+                        print(f"    Throughput: {baseline_tput:.2f} → {current_tput:.2f} req/s ({arrow} {abs(tput_change):.1f}%)")
+                        if tok_per_sec:
+                            print(f"    Token Rate: {tok_per_sec:.1f} tok/s")
     else:
         print("  No baseline run found for comparison")
     
@@ -285,6 +363,11 @@ def compare_runs(run_dirs: list[Path]) -> dict:
             print(f"    PPL: avg={np.mean(ppls):.4f}, range=[{min(ppls):.4f}, {max(ppls):.4f}], n={len(ppls)}")
     
     return {"runs": results}
+
+
+def is_valid_run_dir(path: Path) -> bool:
+    """Check if a directory is a valid run directory."""
+    return (path / "summary.json").exists() or (path / "benchmark_results.json").exists()
 
 
 def main():
@@ -319,14 +402,22 @@ def main():
             print(f"Warning: path not found: {path}")
             continue
         
-        # Check if it's a run directory (has summary.json)
-        if (path / "summary.json").exists():
+        # Check if it's a run directory (has summary.json or benchmark_results.json)
+        if is_valid_run_dir(path):
             run_dirs.append(path)
         else:
             # Assume it's a parent directory containing runs
+            # Support nested structure: runs/{model_short}/{timestamp}_{run_name}
             for child in sorted(path.iterdir()):
-                if child.is_dir() and (child / "summary.json").exists():
-                    run_dirs.append(child)
+                if child.is_dir():
+                    if is_valid_run_dir(child):
+                        # Direct run directory
+                        run_dirs.append(child)
+                    else:
+                        # Could be a model subdirectory, check children
+                        for grandchild in sorted(child.iterdir()):
+                            if grandchild.is_dir() and is_valid_run_dir(grandchild):
+                                run_dirs.append(grandchild)
     
     if not run_dirs:
         print("No valid run directories found")
