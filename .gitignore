@@ -2,4 +2,4 @@ external/*
 *debug_runs*
 __pycache__*
 .DS_Store
-E1.3/outputs/runs*
+Code/Verification/E1.3/outputs*
