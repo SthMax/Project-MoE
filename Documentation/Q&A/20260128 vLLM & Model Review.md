@@ -2,7 +2,7 @@
 
 ### 我们针对 Request 建模还是针对 Token 建模？
 
-我们针对Token流进行建模，因为我们assume整个系统是Heavy Traffic的，所以会有非常多的request / token到来，然后模型里面我们会监测各个Expert的Queue Length，而在vLLM里面这个 scheduling 是 not depend on request 的
+参考 [[final_model]]，我们是针对 Request 建模的。但是实际的路由策略应用在 Token-level。
 
 ### 我们的 Constraint 有什么
 
@@ -12,8 +12,7 @@ Reference:
 
 由 Scheduler output 来传递这个信息给到 GPU Worker -> GPU Model Runner 进行执行
 
-#### 2.  
-
+#### 2. 
 
 
 

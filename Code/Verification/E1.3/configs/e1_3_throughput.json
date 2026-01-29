@@ -1,0 +1,61 @@
+{
+  "run_id": "e1_3_throughput",
+  "description": "PriceMoE throughput benchmark with high concurrency",
+  
+  "model": {
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct",
+    "tensor_parallel_size": 4,
+    "max_model_len": 4096,
+    "max_num_seqs": 32,
+    "dtype": "auto",
+    "trust_remote_code": true,
+    "enforce_eager": true,
+    "disable_custom_all_reduce": true
+  },
+  
+  "routing": {
+    "mode": "price_moe",
+    "top_k": null,
+    "alpha": 0.1,
+    "ema_decay": 0.9,
+    "use_original_weights": true
+  },
+  
+  "generation": {
+    "max_tokens": 128,
+    "temperature": 0.0
+  },
+  
+  "evaluation": {
+    "compute_ppl": false,
+    "collect_routing_stats": true,
+    "benchmark_throughput": true
+  },
+  
+  "throughput": {
+    "num_prompts": 1000,
+    "input_len": 512,
+    "output_len": 128,
+    "concurrency_levels": [1, 4, 8, 16, 32],
+    "request_rate": "inf"
+  },
+  
+  "data": {
+    "seed": 1234,
+    "n_examples": 1000,
+    "max_prompt_tokens": 512
+  },
+  
+  "domains": {
+    "wikitext": {
+      "hf_dataset": {
+        "path": "wikitext",
+        "name": "wikitext-103-raw-v1",
+        "split": "train",
+        "text_field": "text"
+      }
+    }
+  },
+  
+  "output_root": "Code/Verification/E1.3/outputs/runs"
+}
