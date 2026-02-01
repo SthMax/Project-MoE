@@ -7,6 +7,7 @@
 # Usage:
 #   ./scripts/run_ep_heavy_benchmark.sh baseline
 #   ./scripts/run_ep_heavy_benchmark.sh price_moe 0.005
+#   ./scripts/run_ep_heavy_benchmark.sh price_moe 0.005 0.9   # with EMA decay
 
 set -e
 
@@ -16,6 +17,7 @@ E13_DIR="$(dirname "$SCRIPT_DIR")"
 # Parameters
 MODE="${1:-baseline}"
 ALPHA="${2:-0.005}"
+EMA_DECAY="${3:-0.9}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Heavy load config
@@ -50,9 +52,13 @@ echo "=============================================="
 if [ "$MODE" == "price_moe" ]; then
     export VLLM_PRICE_MOE_ENABLED="1"
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
-    export VLLM_PRICE_MOE_EMA_DECAY="0.9"
+    export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
-    RUN_NAME="${TIMESTAMP}_heavy_price_moe_alpha${ALPHA}"
+    if [ "$EMA_DECAY" != "0.9" ]; then
+        RUN_NAME="${TIMESTAMP}_heavy_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
+    else
+        RUN_NAME="${TIMESTAMP}_heavy_price_moe_alpha${ALPHA}_ema0.9"
+    fi
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
@@ -117,6 +123,7 @@ cat > "$OUTPUT_DIR/$RUN_NAME/config.json" << EOF
 {
     "mode": "$MODE",
     "alpha": $ALPHA,
+    "ema_decay": $EMA_DECAY,
     "model": "$MODEL",
     "tensor_parallel_size": $TP,
     "enable_expert_parallel": true,
