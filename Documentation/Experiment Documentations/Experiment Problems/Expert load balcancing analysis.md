@@ -175,4 +175,4 @@ print(f"P50: {p50:.3f}s, P99: {p99:.3f}s, P99/P50: {p99/p50:.2f}x")
 **建议优先级**：
 1. 🔴 验证 per-GPU imbalance（决定是否需要修改优化目标）
 2. 🟡 测量 tail latency（寻找另一个价值点）
-3. 🟢 alpha=0 测试（确认 overhead 影响）
+3. 🟢 alpha=0 测试（确认 overhead 影响），EMA=0实验（确认是否是EMA影响routing决策）
