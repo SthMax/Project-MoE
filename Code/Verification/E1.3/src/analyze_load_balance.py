@@ -24,7 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.utils import load_json, save_json, compute_load_imbalance, gini_coefficient
 
 
-def load_npz_stats(run_dir: Path) -> Optional[dict]:
+def _infer_ep_size(config: dict) -> int:
+    enable_ep = bool(config.get("enable_expert_parallel", False))
+    tp_size = int(config.get("tensor_parallel_size", 1) or 1)
+    return tp_size if enable_ep else 1
+
+
+def load_npz_stats(run_dir: Path, *, ep_size: int = 1) -> Optional[dict]:
     """
     Load routing statistics from npz files in moe_stats/ directory.
     
@@ -83,15 +89,56 @@ def load_npz_stats(run_dir: Path) -> Optional[dict]:
     # Find hottest experts per layer
     hottest_experts = cnt_topk.argmax(axis=1).tolist()
     
+    ep_size = max(int(ep_size or 1), 1)
+    ep_size = min(ep_size, num_experts)
+
+    # EP-rank (per-GPU) load metrics: group experts into contiguous EP buckets.
+    # vLLM uses ep_rank_start = ep_rank * num_local_experts with num_local_experts = num_experts // ep_size.
+    ep_rank_imbalance = []
+    ep_rank_ginis = []
+    if ep_size > 1:
+        experts_per_rank = max(num_experts // ep_size, 1)
+        for layer_idx in range(num_layers):
+            layer_counts = cnt_topk[layer_idx]
+            if layer_counts.sum() <= 0:
+                continue
+            ep_loads = []
+            for ep_rank in range(ep_size):
+                start = ep_rank * experts_per_rank
+                end = (ep_rank + 1) * experts_per_rank
+                if ep_rank == ep_size - 1:
+                    end = num_experts
+                start = min(start, num_experts)
+                end = min(end, num_experts)
+                ep_loads.append(layer_counts[start:end].sum())
+            ep_loads = np.asarray(ep_loads, dtype=np.float64)
+            mean_load = float(ep_loads.mean())
+            max_load = float(ep_loads.max())
+            ep_rank_imbalance.append(max_load / mean_load if mean_load > 0 else 0.0)
+            ep_rank_ginis.append(float(gini_coefficient(ep_loads)) if ep_loads.sum() > 0 else 0.0)
+
     return {
         "num_layers": num_layers,
         "num_experts": num_experts,
+        "ep_size": int(ep_size),
         "total_tokens": int(total_tokens),
         "load_imbalance": {
             "avg": float(np.mean(layer_imbalance)) if layer_imbalance else 0,
             "min": float(np.min(layer_imbalance)) if layer_imbalance else 0,
             "max": float(np.max(layer_imbalance)) if layer_imbalance else 0,
             "per_layer": layer_imbalance,
+        },
+        "ep_rank_load_imbalance": {
+            "avg": float(np.mean(ep_rank_imbalance)) if ep_rank_imbalance else 0.0,
+            "min": float(np.min(ep_rank_imbalance)) if ep_rank_imbalance else 0.0,
+            "max": float(np.max(ep_rank_imbalance)) if ep_rank_imbalance else 0.0,
+            "per_layer": ep_rank_imbalance,
+        },
+        "ep_rank_gini": {
+            "avg": float(np.mean(ep_rank_ginis)) if ep_rank_ginis else 0.0,
+            "min": float(np.min(ep_rank_ginis)) if ep_rank_ginis else 0.0,
+            "max": float(np.max(ep_rank_ginis)) if ep_rank_ginis else 0.0,
+            "per_layer": ep_rank_ginis,
         },
         "gini": float(gini),
         "hottest_experts": hottest_experts,
@@ -113,6 +160,9 @@ def analyze_single_run(run_dir: Path) -> dict:
     summary_path = run_dir / "summary.json"
     benchmark_path = run_dir / "benchmark_results.json"
     config_path = run_dir / "config.json"
+
+    config_for_ep = load_json(config_path) if config_path.exists() else {}
+    ep_size = _infer_ep_size(config_for_ep)
     
     # Determine which format we have
     if summary_path.exists():
@@ -163,9 +213,12 @@ def analyze_single_run(run_dir: Path) -> dict:
         print(f"Throughput: {throughput:.2f} examples/s")
     
     print(f"Total examples: {total_examples}")
+
+    if ep_size > 1:
+        print(f"EP size: {ep_size}")
     
     # Load npz stats from moe_stats/ directory
-    npz_stats = load_npz_stats(run_dir)
+    npz_stats = load_npz_stats(run_dir, ep_size=ep_size)
     if npz_stats:
         print(f"\n--- Load Balance Metrics (from npz) ---")
         print(f"  Layers: {npz_stats['num_layers']}, Experts: {npz_stats['num_experts']}")
@@ -176,6 +229,15 @@ def analyze_single_run(run_dir: Path) -> dict:
         print(f"    Min: {imb['min']:.3f}")
         print(f"    Max: {imb['max']:.3f}")
         print(f"  Gini coefficient: {npz_stats['gini']:.4f}")
+
+        if ep_size > 1:
+            ep_imb = npz_stats.get("ep_rank_load_imbalance", {})
+            ep_gini = npz_stats.get("ep_rank_gini", {})
+            print(f"  EP-rank load imbalance (max/mean):")
+            print(f"    Avg: {ep_imb.get('avg', 0.0):.3f}")
+            print(f"    Min: {ep_imb.get('min', 0.0):.3f}")
+            print(f"    Max: {ep_imb.get('max', 0.0):.3f}")
+            print(f"  EP-rank Gini: {ep_gini.get('avg', 0.0):.4f}")
     else:
         print(f"\n[Info] No npz stats found in {run_dir / 'moe_stats'}")
     
@@ -221,6 +283,7 @@ def analyze_single_run(run_dir: Path) -> dict:
         "throughput": throughput,
         "total_examples": total_examples,
         "num_domains": len(domains),
+        "ep_size": int(ep_size),
     }
     
     # Add benchmark-specific fields if available
@@ -236,6 +299,11 @@ def analyze_single_run(run_dir: Path) -> dict:
         result["load_imbalance_max"] = npz_stats["load_imbalance"]["max"]
         result["gini"] = npz_stats["gini"]
         result["total_tokens"] = npz_stats["total_tokens"]
+
+        if ep_size > 1:
+            result["ep_rank_imbalance_avg"] = npz_stats.get("ep_rank_load_imbalance", {}).get("avg", 0.0)
+            result["ep_rank_imbalance_max"] = npz_stats.get("ep_rank_load_imbalance", {}).get("max", 0.0)
+            result["ep_rank_gini_avg"] = npz_stats.get("ep_rank_gini", {}).get("avg", 0.0)
     
     return result
 
@@ -266,19 +334,29 @@ def compare_runs(run_dirs: list[Path]) -> dict:
     # Determine if this is a throughput benchmark (has requests_per_second)
     is_throughput_benchmark = any(r.get("requests_per_second") for r in results)
     
-    print("\n" + "-"*120)
+    print("\n" + "-"*140)
     print("RANKING BY LOAD BALANCE (lower is better)")
-    print("-"*120)
+    print("-"*140)
     
+    show_ep_cols = any(r.get("ep_rank_imbalance_avg") is not None for r in results)
+
     if is_throughput_benchmark:
-        header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
+        if show_ep_cols:
+            header = (
+                f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} "
+                f"{'Imb':<8} {'Gini':<8} {'EPimb':<8} {'EPgini':<8} {'Req/s':<10} {'Tok/s':<12}"
+            )
+        else:
+            header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
     else:
         header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
     print(header)
-    print("-"*120)
+    print("-"*140)
     
     baseline_imb = None
     baseline_gini = None
+    baseline_ep_imb = None
+    baseline_ep_gini = None
     baseline_tput = None
     for i, r in enumerate(results):
         mode = r.get("routing_mode", "?")
@@ -288,10 +366,14 @@ def compare_runs(run_dirs: list[Path]) -> dict:
         throughput = r.get("throughput", 0)
         req_per_sec = r.get("requests_per_second", 0)
         tok_per_sec = r.get("tokens_per_second", 0)
+        ep_imb = r.get("ep_rank_imbalance_avg", None)
+        ep_gini = r.get("ep_rank_gini_avg", None)
         
         if mode == "baseline":
             baseline_imb = imb
             baseline_gini = gini
+            baseline_ep_imb = ep_imb
+            baseline_ep_gini = ep_gini
             baseline_tput = req_per_sec if req_per_sec else throughput
         
         # Show delta compared to baseline
@@ -301,7 +383,15 @@ def compare_runs(run_dirs: list[Path]) -> dict:
         if is_throughput_benchmark:
             req_str = f"{req_per_sec:.2f}" if req_per_sec else "N/A"
             tok_str = f"{tok_per_sec:.1f}" if tok_per_sec else "N/A"
-            print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
+            if show_ep_cols:
+                ep_imb_str = f"{ep_imb:.3f}" if ep_imb is not None else "N/A"
+                ep_gini_str = f"{ep_gini:.4f}" if ep_gini is not None else "N/A"
+                print(
+                    f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} "
+                    f"{imb_str:<8} {gini_str:<8} {ep_imb_str:<8} {ep_gini_str:<8} {req_str:<10} {tok_str:<12}"
+                )
+            else:
+                print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
         else:
             ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "inf"
             tput_str = f"{throughput:.2f}/s" if throughput else "N/A"
@@ -321,6 +411,8 @@ def compare_runs(run_dirs: list[Path]) -> dict:
             gini = r.get("gini", float("inf"))
             req_per_sec = r.get("requests_per_second", 0)
             tok_per_sec = r.get("tokens_per_second", 0)
+            ep_imb = r.get("ep_rank_imbalance_avg", None)
+            ep_gini = r.get("ep_rank_gini_avg", None)
             
             if imb != float("inf") and baseline_imb > 0:
                 imb_reduction = (1 - imb / baseline_imb) * 100
@@ -329,6 +421,15 @@ def compare_runs(run_dirs: list[Path]) -> dict:
                 if baseline_gini and gini != float("inf"):
                     gini_reduction = (1 - gini / baseline_gini) * 100
                     print(f"    Gini:      {baseline_gini:.4f} → {gini:.4f} (↓ {gini_reduction:.1f}%)")
+
+                if baseline_ep_imb and ep_imb is not None and baseline_ep_imb > 0:
+                    ep_imb_reduction = (1 - ep_imb / baseline_ep_imb) * 100
+                    direction = "↓" if ep_imb_reduction >= 0 else "↑"
+                    print(f"    EP-imb:    {baseline_ep_imb:.3f} → {ep_imb:.3f} ({direction} {abs(ep_imb_reduction):.1f}%)")
+                if baseline_ep_gini and ep_gini is not None and baseline_ep_gini > 0:
+                    ep_gini_reduction = (1 - ep_gini / baseline_ep_gini) * 100
+                    direction = "↓" if ep_gini_reduction >= 0 else "↑"
+                    print(f"    EP-gini:   {baseline_ep_gini:.4f} → {ep_gini:.4f} ({direction} {abs(ep_gini_reduction):.1f}%)")
                 
                 # Throughput improvement (for EP benchmark)
                 if baseline_tput and baseline_tput > 0:

@@ -51,11 +51,8 @@ if [ "$MODE" == "price_moe" ]; then
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
     export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
-    if [ "$EMA_DECAY" != "0.9" ]; then
-        RUN_NAME="${TIMESTAMP}_ep_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
-    else
-        RUN_NAME="${TIMESTAMP}_ep_price_moe_alpha${ALPHA}_ema0.9"
-    fi
+    RUN_NAME="${TIMESTAMP}_ep_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
+
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
