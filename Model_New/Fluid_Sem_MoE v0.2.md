@@ -25,7 +25,7 @@
 ```
 
 **关键洞见**：  
-- **Expert Compute**：GPU 上的 FFN 是高度优化的 batched matrix multiplication，服务时间与 batch size 线性相关，**无 per-token 排队**；
+- **Expert Compute**：GPU 上的 FFN 是高度优化的 batched matrix multiplication，服务时间与 batch size 线性相关，**无 per-token 排队**； PriceMoE 只对“expert 负载不均导致某些 expert GEMM 更慢”这一类问题敏感；但在 vLLM fused MoE 的现实里，throughput 瓶颈更可能来自通信同步 + dispatch/padding + device 级别资源准入，而不是某个 expert 上的排队。
 - **Device Admission**：All-to-All 通信是同步屏障，且受显存约束，Token 在进入 Device 前形成**逻辑排队**。
 
 > 因此，影子价格应定义在 **Device 准入队列 $Q_d(t)$**，而非 Expert 服务队列。这是建模范式的根本转变。
