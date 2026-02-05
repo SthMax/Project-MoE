@@ -1,6 +1,11 @@
 {
   "run_id": "e1_3_smoke_80b",
   "description": "Quick sanity check for PriceMoE routing - Qwen3-Next-80B",
+
+  "run": {
+    "load": "normal",
+    "dataset": "wikitext"
+  },
   
   "model": {
     "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",

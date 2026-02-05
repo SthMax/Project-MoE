@@ -1,6 +1,11 @@
 {
   "run_id": "e1_3_price_moe_80b",
   "description": "PriceMoE MVP: Congestion-aware routing with shadow price α·q_e - Qwen3-Next-80B",
+
+  "run": {
+    "load": "normal",
+    "dataset": "multi"
+  },
   
   "model": {
     "model_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8",

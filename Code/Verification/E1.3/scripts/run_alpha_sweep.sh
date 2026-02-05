@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG_BASE="${PROJECT_DIR}/configs/e1_3_price_moe.json"
+CONFIG_BASE="${PROJECT_DIR}/configs/qwen3-30b/e1_3_price_moe.json"
 
 # Alpha values to sweep
 ALPHA_VALUES=(0.01 0.05 0.1 0.2 0.5 1.0)
@@ -36,10 +36,10 @@ fi
 # Run baseline first
 echo "[1/${#ALPHA_VALUES[@]}] Running baseline..."
 if [[ "$DRY_RUN" == true ]]; then
-    echo "  Would run: python -m src.run_experiment --config configs/e1_3_baseline.json"
+    echo "  Would run: python -m src.run_experiment --config configs/qwen3-30b/e1_3_baseline.json"
 else
     cd "$PROJECT_DIR"
-    python -m src.run_experiment --config configs/e1_3_baseline.json
+    python -m src.run_experiment --config configs/qwen3-30b/e1_3_baseline.json
 fi
 
 # Run PriceMoE with each alpha

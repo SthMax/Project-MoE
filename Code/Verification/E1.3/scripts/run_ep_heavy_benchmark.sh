@@ -18,7 +18,8 @@ E13_DIR="$(dirname "$SCRIPT_DIR")"
 MODE="${1:-baseline}"
 ALPHA="${2:-0.005}"
 EMA_DECAY="${3:-0.9}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+DATE=$(date +%y%m%d)
+TIME=$(date +%H%M%S)
 
 # Heavy load config
 NUM_PROMPTS=2000
@@ -29,11 +30,15 @@ MAX_MODEL_LEN=8192
 
 # Model config
 MODEL="Qwen/Qwen3-30B-A3B-Instruct-2507"
-MODEL_SHORT="qwen3-30b-ep-heavy"
+MODEL_NAME="qwen3-30b"
+EP_MODE="ep"
+LOAD_PROFILE="heavy"
+DATASET="synthetic"
 TP=4
 
 # Output directory
-OUTPUT_DIR="$E13_DIR/outputs/runs/$MODEL_SHORT"
+OUTER_DIR_NAME="${DATE}-${MODEL_NAME}-${EP_MODE}-${LOAD_PROFILE}-${DATASET}"
+OUTPUT_DIR="$E13_DIR/outputs/runs/$OUTER_DIR_NAME"
 mkdir -p "$OUTPUT_DIR"
 
 echo "=============================================="
@@ -41,6 +46,7 @@ echo "E1.3 Heavy Load EP Throughput Benchmark"
 echo "=============================================="
 echo "Mode: $MODE"
 echo "Alpha: $ALPHA (if price_moe)"
+echo "EMA decay: $EMA_DECAY (if price_moe)"
 echo "Num Prompts: $NUM_PROMPTS"
 echo "Input/Output Len: $INPUT_LEN / $OUTPUT_LEN"
 echo "Max Num Seqs: $MAX_NUM_SEQS"
@@ -54,13 +60,18 @@ if [ "$MODE" == "price_moe" ]; then
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
     export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
-    RUN_NAME="${TIMESTAMP}_heavy_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
+    RUN_NAME="${DATE}_${DATASET}_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
     unset VLLM_PRICE_MOE_EMA_DECAY
     unset VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS
-    RUN_NAME="${TIMESTAMP}_heavy_baseline"
+    RUN_NAME="${DATE}_${DATASET}_baseline"
+fi
+
+# Avoid overwriting an existing run directory
+if [ -d "$OUTPUT_DIR/$RUN_NAME" ]; then
+    RUN_NAME="${RUN_NAME}_${TIME}"
 fi
 
 # Create run directory
@@ -128,8 +139,10 @@ cat > "$OUTPUT_DIR/$RUN_NAME/config.json" << EOF
     "output_len": $OUTPUT_LEN,
     "max_num_seqs": $MAX_NUM_SEQS,
     "max_model_len": $MAX_MODEL_LEN,
-    "timestamp": "$TIMESTAMP",
-    "load_profile": "heavy"
+    "date": "$DATE",
+    "time": "$TIME",
+    "load_profile": "$LOAD_PROFILE",
+    "dataset": "$DATASET"
 }
 EOF
 

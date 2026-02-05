@@ -1,6 +1,11 @@
 {
   "run_id": "e1_3_smoke_30b",
   "description": "Quick sanity check for PriceMoE routing - Qwen3-30B",
+
+  "run": {
+    "load": "normal",
+    "dataset": "wikitext"
+  },
   
   "model": {
     "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",

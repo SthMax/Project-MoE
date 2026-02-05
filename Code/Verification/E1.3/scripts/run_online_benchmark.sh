@@ -23,16 +23,22 @@ MODE="${1:-baseline}"
 ALPHA="${2:-0.1}"
 REQUEST_RATE="${3:-8}"  # requests per second
 NUM_PROMPTS="${4:-200}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+DATE=$(date +%y%m%d)
+TIME=$(date +%H%M%S)
+EMA_DECAY="${5:-0.9}"
 
 # Model config
 MODEL="Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
-MODEL_SHORT="qwen3-next-80b"  # For output directory
+MODEL_NAME="qwen3-next-80b"
+EP_MODE="noep"
+LOAD_PROFILE="normal"
+DATASET="online"
 TP=4
 PORT=8000
 
-# Output directory with model subdirectory
-OUTPUT_DIR="$E13_DIR/outputs/runs/$MODEL_SHORT"
+# Output directory
+OUTER_DIR_NAME="${DATE}-${MODEL_NAME}-${EP_MODE}-${LOAD_PROFILE}-${DATASET}"
+OUTPUT_DIR="$E13_DIR/outputs/runs/$OUTER_DIR_NAME"
 mkdir -p "$OUTPUT_DIR"
 
 echo "=============================================="
@@ -40,6 +46,7 @@ echo "E1.3 Online Benchmark"
 echo "=============================================="
 echo "Mode: $MODE"
 echo "Alpha: $ALPHA (if price_moe)"
+echo "EMA decay: $EMA_DECAY (if price_moe)"
 echo "Request Rate: $REQUEST_RATE req/s"
 echo "Num Prompts: $NUM_PROMPTS"
 echo "=============================================="
@@ -49,15 +56,20 @@ if [ "$MODE" == "price_moe" ]; then
     # Use VLLM_PRICE_MOE_* naming (consistent with utils.py)
     export VLLM_PRICE_MOE_ENABLED="1"
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
-    export VLLM_PRICE_MOE_EMA_DECAY="0.9"
+    export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
-    RUN_NAME="${TIMESTAMP}_online_price_moe_alpha${ALPHA}"
+    RUN_NAME="${DATE}_${DATASET}_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
     unset VLLM_PRICE_MOE_EMA_DECAY
     unset VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS
-    RUN_NAME="${TIMESTAMP}_online_baseline"
+    RUN_NAME="${DATE}_${DATASET}_baseline"
+fi
+
+# Avoid overwriting an existing run directory
+if [ -d "$OUTPUT_DIR/$RUN_NAME" ]; then
+    RUN_NAME="${RUN_NAME}_${TIME}"
 fi
 
 # Enable stats collection

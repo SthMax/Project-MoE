@@ -23,15 +23,20 @@ NUM_PROMPTS="${3:-500}"
 INPUT_LEN="${4:-256}"
 OUTPUT_LEN="${5:-128}"
 EMA_DECAY="${6:-0.9}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+DATE=$(date +%y%m%d)
+TIME=$(date +%H%M%S)
 
 # Model config - using 30B for EP (less memory per expert)
 MODEL="Qwen/Qwen3-30B-A3B-Instruct-2507"
-MODEL_SHORT="qwen3-30b-ep"
+MODEL_NAME="qwen3-30b"
+EP_MODE="ep"
+LOAD_PROFILE="normal"
+DATASET="synthetic"
 TP=4  # This becomes EP size when enable_expert_parallel=True
 
 # Output directory
-OUTPUT_DIR="$E13_DIR/outputs/runs/$MODEL_SHORT"
+OUTER_DIR_NAME="${DATE}-${MODEL_NAME}-${EP_MODE}-${LOAD_PROFILE}-${DATASET}"
+OUTPUT_DIR="$E13_DIR/outputs/runs/$OUTER_DIR_NAME"
 mkdir -p "$OUTPUT_DIR"
 
 echo "=============================================="
@@ -39,6 +44,7 @@ echo "E1.3 Expert Parallelism Throughput Benchmark"
 echo "=============================================="
 echo "Mode: $MODE"
 echo "Alpha: $ALPHA (if price_moe)"
+echo "EMA decay: $EMA_DECAY (if price_moe)"
 echo "Num Prompts: $NUM_PROMPTS"
 echo "Input/Output Len: $INPUT_LEN / $OUTPUT_LEN"
 echo "Expert Parallelism: TP=$TP → EP=$TP"
@@ -51,14 +57,19 @@ if [ "$MODE" == "price_moe" ]; then
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
     export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
-    RUN_NAME="${TIMESTAMP}_ep_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
+    RUN_NAME="${DATE}_${DATASET}_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
 
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
     unset VLLM_PRICE_MOE_EMA_DECAY
     unset VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS
-    RUN_NAME="${TIMESTAMP}_ep_baseline"
+    RUN_NAME="${DATE}_${DATASET}_baseline"
+fi
+
+# Avoid overwriting an existing run directory
+if [ -d "$OUTPUT_DIR/$RUN_NAME" ]; then
+    RUN_NAME="${RUN_NAME}_${TIME}"
 fi
 
 # Enable stats collection
@@ -120,7 +131,10 @@ cat > "$OUTPUT_DIR/$RUN_NAME/config.json" << EOF
     "num_prompts": $NUM_PROMPTS,
     "input_len": $INPUT_LEN,
     "output_len": $OUTPUT_LEN,
-    "timestamp": "$TIMESTAMP"
+    "date": "$DATE",
+    "time": "$TIME",
+    "load_profile": "$LOAD_PROFILE",
+    "dataset": "$DATASET"
 }
 EOF
 

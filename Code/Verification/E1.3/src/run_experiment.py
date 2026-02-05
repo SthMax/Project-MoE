@@ -41,6 +41,76 @@ from src.utils import (
 )
 
 
+def _slugify(s: str) -> str:
+    return "".join(ch if (ch.isalnum() or ch in ["-", "_"]) else "-" for ch in s.lower()).strip("-")
+
+
+def _format_float_for_name(x: Any) -> str:
+    if x is None:
+        return "na"
+    try:
+        xf = float(x)
+    except Exception:
+        return _slugify(str(x))
+    if xf == 0.0:
+        return "0.00"
+    return f"{xf:.6f}".rstrip("0").rstrip(".")
+
+
+def _infer_model_short(model_id: str) -> str:
+    model_short = (model_id or "unknown").split("/")[-1].lower()
+    for suffix in ["-instruct", "-fp8", "-a3b", "-2507"]:
+        model_short = model_short.replace(suffix, "")
+    model_short = model_short.replace("--", "-").strip("-")
+    return _slugify(model_short)
+
+
+def _infer_dataset_label(config: dict) -> str:
+    run_meta = config.get("run", {}) or {}
+    if isinstance(run_meta, dict):
+        for key in ["dataset", "dataset_name", "workload"]:
+            v = run_meta.get(key)
+            if v:
+                return _slugify(str(v))
+
+    # Throughput benchmark defaults to synthetic/random prompts unless specified by scripts.
+    if "throughput" in config:
+        return "synthetic"
+
+    domains = config.get("domains", {}) or {}
+    if isinstance(domains, dict):
+        keys = list(domains.keys())
+        if len(keys) == 1:
+            return _slugify(keys[0])
+        if len(keys) > 1:
+            return "multi"
+    return "unknown"
+
+
+def _infer_load_profile(config: dict) -> str:
+    run_meta = config.get("run", {}) or {}
+    if isinstance(run_meta, dict):
+        for key in ["load", "load_profile", "profile"]:
+            v = run_meta.get(key)
+            if v:
+                return _slugify(str(v))
+
+    # Heuristic for throughput configs
+    thr = config.get("throughput", {}) or {}
+    model = config.get("model", {}) or {}
+    num_prompts = int(thr.get("num_prompts", 0) or 0)
+    max_num_seqs = int(model.get("max_num_seqs", 0) or 0)
+    max_model_len = int(model.get("max_model_len", 0) or 0)
+    if num_prompts >= 2000 or max_num_seqs >= 128 or max_model_len >= 8192:
+        return "heavy"
+    return "normal"
+
+
+def _infer_ep_mode(config: dict) -> str:
+    model = config.get("model", {}) or {}
+    return "ep" if bool(model.get("enable_expert_parallel", False)) else "noep"
+
+
 def get_routing_stats_collector():
     """
     Get the routing stats collector from vLLM.
@@ -178,11 +248,20 @@ def run_experiment(config: dict, output_dir: Path) -> dict:
     from vllm import LLM
     
     print("[E1.3] === Starting Experiment ===")
-    print(f"[E1.3] Routing mode: {config.get('routing', {}).get('mode', 'baseline')}")
+    routing_cfg = config.get("routing", {})
+    routing_mode = routing_cfg.get("mode", "baseline")
+    print(f"[E1.3] Routing mode: {routing_mode}")
+    if routing_mode == "price_moe":
+        print(
+            f"[E1.3] PriceMoE params: alpha={routing_cfg.get('alpha')}, "
+            f"ema_decay={routing_cfg.get('ema_decay')}, "
+            f"use_original_weights={routing_cfg.get('use_original_weights')}"
+        )
+    elif routing_mode == "variable_k":
+        print(f"[E1.3] Variable-k params: top_k={routing_cfg.get('top_k')}")
     print(f"[E1.3] Output directory: {output_dir}")
     
     # Setup environment variables for routing
-    routing_cfg = config.get("routing", {})
     set_vars = setup_routing_env(routing_cfg)
     
     # Enable moe_stats collection by setting VLLM_MOE_STATS_DIR
@@ -274,6 +353,7 @@ def run_throughput_benchmark(config: dict, output_dir: Path) -> dict:
     
     # Setup environment variables for routing
     routing_cfg = config.get("routing", {})
+    routing_mode = routing_cfg.get("mode", "baseline")
     set_vars = setup_routing_env(routing_cfg)
     
     # Enable moe_stats collection
@@ -281,7 +361,13 @@ def run_throughput_benchmark(config: dict, output_dir: Path) -> dict:
     set_vars["VLLM_MOE_STATS_DIR"] = str(output_dir / "moe_stats")
     (output_dir / "moe_stats").mkdir(parents=True, exist_ok=True)
     
-    print(f"[E1.3] Routing mode: {routing_cfg.get('mode', 'baseline')}")
+    print(f"[E1.3] Routing mode: {routing_mode}")
+    if routing_mode == "price_moe":
+        print(
+            f"[E1.3] PriceMoE params: alpha={routing_cfg.get('alpha')}, "
+            f"ema_decay={routing_cfg.get('ema_decay')}, "
+            f"use_original_weights={routing_cfg.get('use_original_weights')}"
+        )
     print(f"[E1.3] Environment variables set: {set_vars}")
     
     try:
@@ -415,31 +501,40 @@ def main():
         output_dir = Path(args.output_dir)
     else:
         base_dir = Path(__file__).resolve().parent.parent / "outputs" / "runs"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        run_name = args.run_name or config_path.stem
-        routing_mode = config.get("routing", {}).get("mode", "baseline")
-        
-        # Add routing params to run name for clarity
-        if routing_mode == "price_moe":
-            alpha = config.get("routing", {}).get("alpha", 0.1)
-            run_name = f"{run_name}_alpha{alpha}"
-        elif routing_mode == "variable_k":
-            k = config.get("routing", {}).get("top_k", "default")
-            run_name = f"{run_name}_k{k}"
-        
-        # Extract model short name for subdirectory
+
+        now = datetime.now()
+        date_tag = now.strftime("%y%m%d")
+        time_tag = now.strftime("%H%M%S")
+
+        routing_cfg = config.get("routing", {}) or {}
+        routing_mode = routing_cfg.get("mode", "baseline")
+
         model_id = config.get("model", {}).get("model_id", "unknown")
-        # e.g. "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8" -> "qwen3-next-80b"
-        # e.g. "Qwen/Qwen3-30B-A3B-Instruct-2507" -> "qwen3-30b"
-        model_short = model_id.split("/")[-1].lower()
-        # Simplify common patterns
-        for suffix in ["-instruct", "-fp8", "-a3b", "-2507"]:
-            model_short = model_short.replace(suffix, "")
-        model_short = model_short.replace("--", "-").strip("-")
-        
-        # Create subdirectory per model: outputs/runs/{model_short}/{timestamp}_{run_name}
-        output_dir = base_dir / model_short / f"{timestamp}_{run_name}"
+        model_short = _infer_model_short(model_id)
+        ep_mode = _infer_ep_mode(config)
+        load_profile = _infer_load_profile(config)
+        dataset = _infer_dataset_label(config)
+
+        outer_dir_name = f"{date_tag}-{model_short}-{ep_mode}-{load_profile}-{dataset}"
+
+        if args.run_name:
+            run_dir_name = f"{date_tag}_{_slugify(args.run_name)}"
+        else:
+            run_dir_name = f"{date_tag}_{dataset}_{routing_mode}"
+            if routing_mode == "price_moe":
+                alpha = _format_float_for_name(routing_cfg.get("alpha"))
+                ema = _format_float_for_name(routing_cfg.get("ema_decay"))
+                run_dir_name = f"{run_dir_name}_alpha{alpha}_ema{ema}"
+            elif routing_mode == "variable_k":
+                k = routing_cfg.get("top_k", "default")
+                run_dir_name = f"{run_dir_name}_k{_slugify(str(k))}"
+
+        # Avoid collisions if user reruns multiple times in the same day
+        candidate = base_dir / outer_dir_name / run_dir_name
+        if candidate.exists():
+            run_dir_name = f"{run_dir_name}_{time_tag}"
+
+        output_dir = base_dir / outer_dir_name / run_dir_name
     
     output_dir = ensure_dir(output_dir)
     
