@@ -1,4 +1,4 @@
 [submodule "external/vllm"]
 	path = external/vllm
-	url = git@github.com:SthMax/vllm.git
+	url = https://github.com/SthMax/vllm.git
 	branch = v0.14.0-MoE
