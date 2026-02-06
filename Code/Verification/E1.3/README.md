@@ -10,7 +10,7 @@ See the design document:
 ## Environment
 
 - vLLM is expected to be importable from the **conda env** `moe`.
-- vLLM source is expected at `~/sthmax/git/vllm` (symlinked at `external/vllm`).
+- vLLM source is expected at `external/vllm` (Git submodule of this repo).
 - This experiment requires the **PriceMoE router patch** to be applied to vLLM.
 
 ## Experiment Modes
