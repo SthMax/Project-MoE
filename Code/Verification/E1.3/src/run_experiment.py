@@ -525,6 +525,9 @@ def main():
                 alpha = _format_float_for_name(routing_cfg.get("alpha"))
                 ema = _format_float_for_name(routing_cfg.get("ema_decay"))
                 run_dir_name = f"{run_dir_name}_alpha{alpha}_ema{ema}"
+                update_interval = routing_cfg.get("update_interval", 1)
+                if update_interval is not None and int(update_interval) != 1:
+                    run_dir_name = f"{run_dir_name}_interval{update_interval}"
             elif routing_mode == "variable_k":
                 k = routing_cfg.get("top_k", "default")
                 run_dir_name = f"{run_dir_name}_k{_slugify(str(k))}"

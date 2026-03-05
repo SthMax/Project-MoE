@@ -7,8 +7,9 @@
 # Usage:
 #   ./scripts/run_ep_heavy_sharegpt.sh baseline
 #   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0.005
-#   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0.005 0.9   # with EMA decay
-#   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0 0.9       # alpha=0 for overhead test
+#   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0.005 0.9          # with EMA decay
+#   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0 0.9              # alpha=0 for overhead test
+#   ./scripts/run_ep_heavy_sharegpt.sh price_moe 0.005 0.9 3        # update EMA every 3 steps
 #
 # EMA decay (ρ) controls memory length:
 #   0.9 (default): smooth, 90% history retention
@@ -25,6 +26,7 @@ E13_DIR="$(dirname "$SCRIPT_DIR")"
 MODE="${1:-baseline}"
 ALPHA="${2:-0.005}"
 EMA_DECAY="${3:-0.9}"
+UPDATE_INTERVAL="${4:-1}"
 DATE=$(date +%y%m%d)
 TIME=$(date +%H%M%S)
 
@@ -57,6 +59,7 @@ echo "=============================================="
 echo "Mode: $MODE"
 echo "Alpha: $ALPHA (if price_moe)"
 echo "EMA decay: $EMA_DECAY (if price_moe)"
+echo "Update interval: $UPDATE_INTERVAL (if price_moe)"
 echo "Dataset: $HF_DATASET (HuggingFace)"
 echo "Num Prompts: $NUM_PROMPTS"
 echo "Max Num Seqs: $MAX_NUM_SEQS"
@@ -70,13 +73,19 @@ if [ "$MODE" == "price_moe" ]; then
     export VLLM_PRICE_MOE_ALPHA="$ALPHA"
     export VLLM_PRICE_MOE_EMA_DECAY="$EMA_DECAY"
     export VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS="1"
+    export VLLM_PRICE_MOE_UPDATE_INTERVAL="$UPDATE_INTERVAL"
     # Include ema in run name only if non-default
     RUN_NAME="${DATE}_${DATASET}_price_moe_alpha${ALPHA}_ema${EMA_DECAY}"
+    # Append interval to run name when non-default
+    if [ "$UPDATE_INTERVAL" != "1" ]; then
+        RUN_NAME="${RUN_NAME}_interval${UPDATE_INTERVAL}"
+    fi
 else
     unset VLLM_PRICE_MOE_ENABLED
     unset VLLM_PRICE_MOE_ALPHA
     unset VLLM_PRICE_MOE_EMA_DECAY
     unset VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS
+    unset VLLM_PRICE_MOE_UPDATE_INTERVAL
     RUN_NAME="${DATE}_${DATASET}_baseline"
 fi
 
@@ -156,7 +165,8 @@ cat > "$OUTPUT_DIR/$RUN_NAME/config.json" << EOF
     "max_model_len": $MAX_MODEL_LEN,
     "date": "$DATE",
     "time": "$TIME",
-    "load_profile": "heavy-sharegpt"
+    "load_profile": "heavy-sharegpt",
+    "update_interval": $UPDATE_INTERVAL
 }
 EOF
 

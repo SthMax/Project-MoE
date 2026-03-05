@@ -201,6 +201,14 @@ def analyze_single_run(run_dir: Path) -> dict:
     print(f"Routing mode: {routing_mode}")
     print(f"Routing params: {routing_params}")
     
+    # Update interval: read from config if present
+    # Shell-script configs store it at top level; run_experiment.py configs nest it under 'routing'
+    update_interval = config_for_ep.get('update_interval', None)
+    if update_interval is None:
+        update_interval = config_for_ep.get('routing', {}).get('update_interval', None)
+    if update_interval is not None:
+        print(f"Update interval: {update_interval}")
+    
     if avg_ppl != float('inf'):
         print(f"Average PPL: {avg_ppl:.4f}")
     
@@ -275,16 +283,27 @@ def analyze_single_run(run_dir: Path) -> dict:
         
         aggregate_ppl.append(ppl)
     
+    # Build per-domain PPL dict for comparison
+    domain_ppls = {}
+    for domain_result in domains:
+        domain = domain_result.get("domain", "unknown")
+        ppl_val = domain_result.get("ppl", {}).get("ppl", float("inf"))
+        if ppl_val != float("inf"):
+            domain_ppls[domain] = ppl_val
+
     result = {
         "run_name": run_dir.name,
         "routing_mode": routing_mode,
         "routing_params": routing_params,
         "average_ppl": avg_ppl,
+        "domain_ppls": domain_ppls,
         "throughput": throughput,
         "total_examples": total_examples,
         "num_domains": len(domains),
         "ep_size": int(ep_size),
     }
+    if update_interval is not None:
+        result["update_interval"] = update_interval
     
     # Add benchmark-specific fields if available
     if benchmark_path.exists():
@@ -333,6 +352,8 @@ def compare_runs(run_dirs: list[Path]) -> dict:
     
     # Determine if this is a throughput benchmark (has requests_per_second)
     is_throughput_benchmark = any(r.get("requests_per_second") for r in results)
+    # Check if any run has PPL data
+    has_ppl_data = any(r.get("average_ppl", float("inf")) != float("inf") for r in results)
     
     print("\n" + "-"*140)
     print("RANKING BY LOAD BALANCE (lower is better)")
@@ -340,16 +361,23 @@ def compare_runs(run_dirs: list[Path]) -> dict:
     
     show_ep_cols = any(r.get("ep_rank_imbalance_avg") is not None for r in results)
 
+    # Check if any non-baseline run has update_interval
+    has_interval = any(r.get("update_interval") is not None and r.get("routing_mode") != "baseline" for r in results)
+
     if is_throughput_benchmark:
         if show_ep_cols:
             header = (
                 f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} "
-                f"{'Imb':<8} {'Gini':<8} {'EPimb':<8} {'EPgini':<8} {'Req/s':<10} {'Tok/s':<12}"
+                + (f"{'Intv':<6} " if has_interval else "")
+                + f"{'Imb':<8} {'Gini':<8} {'EPimb':<8} {'EPgini':<8} {'Req/s':<10} {'Tok/s':<12}"
             )
         else:
-            header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
+            header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} " + (f"{'Intv':<6} " if has_interval else "") + f"{'Imbalance':<10} {'Gini':<8} {'Req/s':<10} {'Tok/s':<12}"
     else:
-        header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} {'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
+        if has_ppl_data:
+            header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} " + (f"{'Intv':<6} " if has_interval else "") + f"{'Imbalance':<12} {'Gini':<10} {'PPL':<10} {'Tput':<10}"
+        else:
+            header = f"{'Rank':<5} {'Run Name':<55} {'Mode':<12} " + (f"{'Intv':<6} " if has_interval else "") + f"{'Imbalance':<12} {'Gini':<10} {'Tput':<10}"
     print(header)
     print("-"*140)
     
@@ -368,6 +396,8 @@ def compare_runs(run_dirs: list[Path]) -> dict:
         tok_per_sec = r.get("tokens_per_second", 0)
         ep_imb = r.get("ep_rank_imbalance_avg", None)
         ep_gini = r.get("ep_rank_gini_avg", None)
+        intv = r.get("update_interval", None)
+        intv_str = f"{intv}" if intv is not None else "-"
         
         if mode == "baseline":
             baseline_imb = imb
@@ -388,20 +418,35 @@ def compare_runs(run_dirs: list[Path]) -> dict:
                 ep_gini_str = f"{ep_gini:.4f}" if ep_gini is not None else "N/A"
                 print(
                     f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} "
-                    f"{imb_str:<8} {gini_str:<8} {ep_imb_str:<8} {ep_gini_str:<8} {req_str:<10} {tok_str:<12}"
+                    + (f"{intv_str:<6} " if has_interval else "")
+                    + f"{imb_str:<8} {gini_str:<8} {ep_imb_str:<8} {ep_gini_str:<8} {req_str:<10} {tok_str:<12}"
                 )
             else:
-                print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
+                print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} " + (f"{intv_str:<6} " if has_interval else "") + f"{imb_str:<10} {gini_str:<8} {req_str:<10} {tok_str:<12}")
         else:
-            ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "inf"
             tput_str = f"{throughput:.2f}/s" if throughput else "N/A"
-            print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} {imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
+            if has_ppl_data:
+                ppl_str = f"{ppl:.4f}" if ppl != float("inf") else "N/A"
+                print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} " + (f"{intv_str:<6} " if has_interval else "") + f"{imb_str:<12} {gini_str:<10} {ppl_str:<10} {tput_str:<10}")
+            else:
+                print(f"{i+1:<5} {r['run_name'][:55]:<55} {mode:<12} " + (f"{intv_str:<6} " if has_interval else "") + f"{imb_str:<12} {gini_str:<10} {tput_str:<10}")
     
     # Compute improvements
     print("\n" + "-"*80)
     print("IMPROVEMENTS vs BASELINE")
     print("-"*80)
     
+    # Find baseline PPL and domain PPLs for comparison
+    baseline_ppl = None
+    baseline_domain_ppls = {}
+    for r in results:
+        if r.get("routing_mode") == "baseline":
+            ppl_val = r.get("average_ppl", float("inf"))
+            if ppl_val != float("inf"):
+                baseline_ppl = ppl_val
+                baseline_domain_ppls = r.get("domain_ppls", {})
+            break
+
     if baseline_imb is not None and baseline_imb != float("inf"):
         for r in results:
             mode = r.get("routing_mode", "?")
@@ -440,6 +485,23 @@ def compare_runs(run_dirs: list[Path]) -> dict:
                         print(f"    Throughput: {baseline_tput:.2f} → {current_tput:.2f} req/s ({arrow} {abs(tput_change):.1f}%)")
                         if tok_per_sec:
                             print(f"    Token Rate: {tok_per_sec:.1f} tok/s")
+
+                # PPL comparison
+                run_ppl = r.get("average_ppl", float("inf"))
+                if baseline_ppl is not None and run_ppl != float("inf"):
+                    ppl_change = (run_ppl / baseline_ppl - 1) * 100
+                    arrow = "↑" if ppl_change > 0 else "↓"
+                    print(f"    PPL:       {baseline_ppl:.4f} → {run_ppl:.4f} ({arrow} {abs(ppl_change):.1f}%)")
+                    # Per-domain PPL breakdown
+                    run_domain_ppls = r.get("domain_ppls", {})
+                    if baseline_domain_ppls and run_domain_ppls:
+                        for domain in sorted(baseline_domain_ppls.keys()):
+                            if domain in run_domain_ppls:
+                                bl_d = baseline_domain_ppls[domain]
+                                rn_d = run_domain_ppls[domain]
+                                d_change = (rn_d / bl_d - 1) * 100
+                                d_arrow = "↑" if d_change > 0 else "↓"
+                                print(f"      {domain:>12}: {bl_d:.4f} → {rn_d:.4f} ({d_arrow} {abs(d_change):.1f}%)")
     else:
         print("  No baseline run found for comparison")
     

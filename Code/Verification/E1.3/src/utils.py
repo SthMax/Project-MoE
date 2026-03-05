@@ -270,6 +270,11 @@ def setup_routing_env(routing_config: dict) -> dict:
             set_vars["VLLM_PRICE_MOE_USE_ORIGINAL_WEIGHTS"] = (
                 "1" if use_original_weights else "0"
             )
+        
+        update_interval = routing_config.get("update_interval")
+        if update_interval is not None:
+            os.environ["VLLM_PRICE_MOE_UPDATE_INTERVAL"] = str(update_interval)
+            set_vars["VLLM_PRICE_MOE_UPDATE_INTERVAL"] = str(update_interval)
     
     elif mode == "variable_k":
         top_k = routing_config.get("top_k")
